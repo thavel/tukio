@@ -86,26 +86,58 @@ class Task(object, metaclass=ConfigBeforeRun):
         """
         A task can run only once and can either be cancel or timeout.
         """
-        if self._future is not None:
-            raise RuntimeError('a task can be run only once')
-        self._future = asyncio.ensure_future(self.execute(data),
-                                             loop=self._loop)
+        if self._future is None:
+            self._future = asyncio.ensure_future(self.execute(data),
+                                                 loop=self.loop)
         try:
-            self._result = await asyncio.wait_for(self._future, self._timeout,
-                                                  loop=self._loop)
+            await asyncio.wait_for(self._future, self._timeout, loop=self.loop)
         except asyncio.TimeoutError:
-            logger.warning("task '{}' timed out")
+            logger.warning("task '{}' timed out".format(self.uid))
             await self.on_timeout(data)
         except asyncio.CancelledError:
-            logger.warning("task '{}' has been cancelled")
+            logger.warning("task '{}' has been cancelled".format(self.uid))
             await self.on_cancel(data)
-
-    async def cancel(self):
-        if self._future is not None:
-            self._future.cancel()
         else:
-            logger.warning("task '{}' not started, cannot be "
-                           "cancelled!".format(self.uid))
+            return self._future.result()
+
+    def cancel(self):
+        """
+        Cancel the task.
+        The behavior of this method stick to `asyncio.Future.cancel()`.
+        """
+        if self._future is None:
+            self._future = asyncio.Future()
+        return self._future.cancel()
+
+    def cancelled(self):
+        """
+        Return True if the future was cancelled.
+        The behavior of this method stick to `asyncio.Future.cancelled()`.
+        """
+        if self._future is None:
+            return False
+        return self._future.cancelled()
+
+    def result(self):
+        """
+        Return the result of the task.
+        The behavior of this method stick to `asyncio.Future.result()`.
+        """
+        if self._future is None:
+            # Raises InvalidStateError
+            return asyncio.Future().result()
+        return self._future.result()
+
+    def done(self):
+        """
+        Return True if the task is done.
+        Done means either that a result / exception are available, or that the
+        task was cancelled.
+        The behavior of this method stick to `asyncio.Future.done()`.
+        """
+        if self._future is None:
+            return False
+        return self._future.done()
 
     async def execute(self, data=None):
         """
@@ -184,6 +216,9 @@ if __name__ == '__main__':
             else:
                 self.myconfig = 'got config: {} and {}'.format(dummy, other)
 
+        async def on_cancel(self, data=None):
+            logger.info("called 'on_cancel' handler")
+
 
     class Task2(Task):
         async def execute(self, data=None):
@@ -196,16 +231,26 @@ if __name__ == '__main__':
 
     broker = Broker(loop=loop)
 
-    ## TEST1: configure 1 task and run it
+    # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
     config = {'dummy': 'world'}
     t1 = Task1(config=config, broker=broker, loop=loop)
+
+    # Must raise InvalidStateError
+    # t1.result()
+
     loop.run_until_complete(t1.run('continue'))
+    print("Task is done?: {}".format(t1.done()))
+
     # Must raise RuntimeError
     # t1.configure(**config)
-    # loop.run_until_complete(t1.run('continue'))
 
-    ## TEST2: run 2 tasks running in parallel and using the broker
+    # Does not re-run the task but returns the result
+    # print("----")
+    # print(loop.run_until_complete(t1.run('continue')))
+    # print(t1.result())
+
+    # TEST2: run 2 tasks running in parallel and using the broker
     print("+++++++ TEST2")
     t1 = Task1(config=config, loop=loop, broker=broker)
     t2 = Task2(loop=loop, broker=broker)
@@ -215,5 +260,13 @@ if __name__ == '__main__':
         asyncio.ensure_future(t2.run())
     ]
     loop.run_until_complete(asyncio.wait(tasks))
+
+    # TEST3: cancel a task before running
+    print("+++++++ TEST3")
+    config = {'dummy': 'world'}
+    t1 = Task1(config=config, broker=broker, loop=loop)
+    t1.cancel()
+    loop.run_until_complete(t1.run('continue'))
+    print("Task is cancelled?: {}".format(t1.cancelled()))
 
     loop.close()
