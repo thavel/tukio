@@ -5,6 +5,12 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+def _ensure_coroutine(callback):
+    if not asyncio.iscoroutinefunction(callback):
+        return asyncio.coroutine(callback)
+    return callback
+
+
 class Broker(object):
     """
     The workflow engine has a global event broker that gathers external
@@ -16,11 +22,6 @@ class Broker(object):
     def __init__(self, loop=None):
         self._loop = loop or asyncio.get_event_loop()
         self._handlers = {}
-
-    def _ensure_coroutine(self, callback):
-        if not asyncio.iscoroutinefunction(callback):
-            return asyncio.coroutine(callback)
-        return callback
 
     async def fire(self, topic, data):
         """
@@ -39,7 +40,7 @@ class Broker(object):
         Register a handler to be executed upon receiving events in a given
         topic.
         """
-        coro = self._ensure_coroutine(handler)
+        coro = _ensure_coroutine(handler)
         try:
             self._handlers[topic].append(coro)
         except KeyError:

@@ -4,12 +4,28 @@ import asyncio
 from task import Task
 from broker import Broker
 from threading import Event
+from uuid import uuid4
 
 
 logger = logging.getLogger(__name__)
 
 # from task import Task, State
 
+
+class Workflow(object):
+    """
+    A workflow ties together a set of tasks as a DAG (Directed Acyclic Graph).
+    A workflow instance can run only once.
+    """
+    def __init__(self):
+        # Unique execution ID of the workflow
+        self._uid = "-".join(['wf', str(uuid4())[:8]])
+
+    def run(self):
+        pass
+
+    def cancel(self):
+        pass
 
 # class Workflow(object):
 

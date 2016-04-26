@@ -171,11 +171,12 @@ class DAG(object):
 
 if __name__ == '__main__':
     graph = {
-        'A': ['A'],
-        'B': ['C', 'D'],
+        'A': ['B'],
+        'B': ['C', 'D', 'E'],
         'C': ['E'],
         'D': ['E'],
-        'E': []
+        'E': [],
+        'F': []
     }
     dag = DAG.from_dict(graph)
     print("root nodes are: {}".format(dag.root_nodes()))
