@@ -75,7 +75,7 @@ class Task(metaclass=ConfigBeforeRun):
     # All subclasses of `Task` will be automatically registered with a name.
     NAME = None
 
-    def __init__(self, config={}, loop=None, broker=None):
+    def __init__(self, config=None, loop=None, broker=None):
         # Unique execution ID of the task
         self._uid = "-".join(['task', str(uuid4())[:8]])
         self._loop = loop or asyncio.get_event_loop()
@@ -242,11 +242,16 @@ class TaskDescription(object):
     name = TypedAttribute(attrname='name', attrtype=str, default='')
     config = TypedAttribute(attrname='config', attrtype=dict, default={})
 
-    def __init__(self, name, config={}, loop=None, broker=None):
+    def __init__(self, name, config=None, loop=None, broker=None, uid=None):
+        self._uid = uid or "-".join(['task-desc', str(uuid4())[:8]])
         self.name = name
         self.config = config or {}
         self.loop = loop
         self.broker = broker
+
+    @property
+    def uid(self):
+        return self._uid
 
     def new_task(self, loop=None, broker=None):
         """
@@ -259,6 +264,22 @@ class TaskDescription(object):
         t_broker = broker or self.broker
         klass = RegisteredTask.get(self.name)
         return klass(self.config, t_loop, t_broker)
+
+    @classmethod
+    def from_dict(cls, task_dict):
+        """
+        Create a new task description object from the given dictionary.
+        The dictionary takes the form of:
+            {
+                "uid": <task-uid>,
+                "name": <registered-task-name>,
+                "config": <config-dict>
+            }
+        """
+        uid = task_dict.get('uid')
+        name = task_dict['name']
+        config = task_dict.get('config')
+        return cls(name, config=config, uid=uid)
 
 
 if __name__ == '__main__':
@@ -300,22 +321,21 @@ if __name__ == '__main__':
         async def on_cancel(self, data=None):
             logger.info("called 'on_cancel' handler")
 
-
     class Task2(Task):
         async def execute(self, data=None):
             if isinstance(data, Task):
                 logger.info("Input data is task UID={}".format(data.uid))
-            for i in range(3):
+            for _ in range(3):
                 logger.info("{} ==> fire is coming...".format(self.uid))
                 await asyncio.sleep(1)
             await self.fire('hello world')
 
-    broker = Broker(loop=ioloop)
+    brokr = Broker(loop=ioloop)
 
     # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
-    config = {'dummy': 'world'}
-    t1 = Task1(config=config, broker=broker, loop=ioloop)
+    cfg = {'dummy': 'world'}
+    t1 = Task1(config=cfg, broker=brokr, loop=ioloop)
 
     # Must raise InvalidStateError
     # t1.result()
@@ -324,7 +344,7 @@ if __name__ == '__main__':
     print("Task is done?: {}".format(t1.done()))
 
     # Must raise RuntimeError
-    # t1.configure(**config)
+    # t1.configure(**cfg)
 
     # Does not re-run the task but returns the result
     # print("----")
@@ -333,8 +353,8 @@ if __name__ == '__main__':
 
     # TEST2: run 2 tasks running in parallel and using the broker
     print("+++++++ TEST2")
-    t1 = Task1(config=config, loop=ioloop, broker=broker)
-    t2 = Task2(loop=ioloop, broker=broker)
+    t1 = Task1(config=cfg, loop=ioloop, broker=brokr)
+    t2 = Task2(loop=ioloop, broker=brokr)
     t1.register(t2.uid, t1.on_event)
     tasks = [
         asyncio.ensure_future(t1.run()),
@@ -344,8 +364,8 @@ if __name__ == '__main__':
 
     # TEST3: cancel a task before running
     print("+++++++ TEST3")
-    config = {'dummy': 'world'}
-    t1 = Task1(config=config, broker=broker, loop=ioloop)
+    cfg = {'dummy': 'world'}
+    t1 = Task1(config=cfg, broker=brokr, loop=ioloop)
     t1.cancel()
     ioloop.run_until_complete(t1.run('continue'))
     print("Task is cancelled?: {}".format(t1.cancelled()))

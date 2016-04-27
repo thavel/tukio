@@ -4,7 +4,7 @@ import asyncio
 import weakref
 from uuid import uuid4
 from dag import DAG
-from task import Task
+from task import TaskDescription
 
 
 logger = logging.getLogger(__name__)
@@ -18,50 +18,58 @@ class WorkflowRootTaskError(WorkflowError):
     pass
 
 
-class Workflow(object):
+class WorkflowDescription(object):
     """
-    This class models a workflow. A workflow is a DAG (Directed Acyclic Graph)
-    made up of tasks.
-    This class is meant to hold the description of a workflow; it is not a
-    workflow execution engine.
-    It provides an API to easily build and update a consistent graph.
+    A workflow description is a DAG (Directed Acyclic Graph) made up of task
+    description objects (`TaskDescription`). This class is not a workflow
+    execution engine.
+    It provides an API to easily build and update a consistent workflow as well
+    as created runnable workflow instances.
     """
-    def __init__(self):
+    def __init__(self, uid=None):
         # Unique execution ID of the workflow
-        self._uid = "-".join(['wf', str(uuid4())[:8]])
+        self._uid = uid or "-".join(['wf', str(uuid4())[:8]])
         self._dag = DAG()
         self._tasks = weakref.WeakValueDictionary()
+
+    @property
+    def uid(self):
+        return self._uid
 
     @property
     def dag(self):
         return self._dag
 
-    def add_task(self, task):
-        """
-        Adds a new task to the workflow. The task will remain orphan until it
-        is linked to upstream/downstream tasks.
-        This method must be passed a `Task()` instance.
-        """
-        if not isinstance(task, Task):
-            raise TypeError("task must an 'Task()' instance")
-        self.dag.add_node(task)
-        self._tasks[task.uid] = task
+    @property
+    def tasks(self):
+        return dict(self._tasks)
 
-    def delete_task(self, task):
+    def add(self, task_desc):
         """
-        Remove a task from the workflow and the links to upstream/downstream
-        tasks.
+        Adds a new task description to the workflow. The task will remain
+        orphan until it is linked to upstream/downstream tasks.
+        This method must be passed a `TaskDescription()` instance.
         """
-        self.dag.delete_node(task)
+        if not isinstance(task_desc, TaskDescription):
+            raise TypeError("expected a 'TaskDescription' instance")
+        self.dag.add_node(task_desc)
+        self._tasks[task_desc.uid] = task_desc
 
-    def get_task(self, task_id):
+    def delete(self, task_desc):
+        """
+        Remove a task description from the workflow and delete the links to
+        upstream/downstream tasks.
+        """
+        self.dag.delete_node(task_desc)
+
+    def get(self, task_id):
         """
         Returns the task object that has the searched task ID. Returns 'None'
         if the task ID was not found.
         """
         return self._tasks.get(task_id, None)
 
-    def root_task(self):
+    def root(self):
         """
         Returns the root task. If no root task or several root tasks were found
         raises `WorkflowValidationError`.
@@ -73,80 +81,90 @@ class Workflow(object):
             raise WorkflowRootTaskError("expected one root task, "
                                         "found {}".format(root_task))
 
-    def set_downstream(self, task, down_tasks):
+    def link(self, up_task_desc, down_task_desc):
         """
-        Set a task, or a task task to be directly downstream from the current
-        task.
+        Create a directed link from an upstream to a downstream task.
         """
-        for dt in down_tasks:
-            self.dag.add_edge(task, dt)
+        self.dag.add_edge(up_task_desc, down_task_desc)
 
-    def set_upstream(self, task, up_tasks):
+    def unlink(self, task_desc1, task_desc2):
         """
-        Set a task, or a task task to be directly upstream from the current
-        task.
+        Remove the link between two tasks.
         """
-        for ut in up_tasks:
-            self.dag.add_edge(ut, task)
+        try:
+            self.dag.delete_edge(task_desc1, task_desc2)
+        except KeyError:
+            self.dag.delete_edge(task_desc2, task_desc1)
+
+    @classmethod
+    def from_dict(cls, wf_dict):
+        """
+        Build a new workflow description from the given dictionary.
+        The dictionary takes the form of:
+            {
+                "uid": <workflow-uid>
+                "tasks": [
+                    {"uid": <task-uid>, "name": <name>, "config": <cfg-dict>},
+                    ...
+                ],
+                "graph": {
+                    <t1-uid>: [t2-uid, <t3-uid>],
+                    <t2-uid>: [],
+                    ...
+                }
+            }
+        """
+        uid = wf_dict['uid']
+        wf_desc = cls(uid)
+        for task_dict in wf_dict['tasks']:
+            task_desc = TaskDescription.from_dict(task_dict)
+            wf_desc.add(task_desc)
+        for up_id, down_ids_set in wf_dict['graph'].items():
+            up_desc = wf_desc.get(up_id)
+            for down_id in down_ids_set:
+                down_desc = wf_desc.get(down_id)
+                wf_desc.link(up_desc, down_desc)
+        return wf_desc
 
 
-# class Workflow(object):
-
-#     def __init__(self, task, loop=None):
-#         assert isinstance(task, Task)
-#         self._loop = loop or asyncio.get_event_loop()
-#         self._initial_data = None
-#         self._state = State.pending
-#         task.workflow = self
-#         self._root_task = task
-
-#     @property
-#     def root_task(self):
-#         return self._root_task
-
-#     @property
-#     def exec_id(self):
-#         return self._root_task.id
-
-#     @property
-#     def loop(self):
-#         return self._loop
-
-#     @property
-#     def initial_data(self):
-#         return self._initial_data
-
-#     def get_tasks(self, state=None):
-#         """
-#         Return the final tasks required for the workflow to end
-#         """
-#         return self._root_task.get_tasks(state)
-
-#     async def run(self, data=None):
-#         """
-#         Run the workflow, waiting for the final tasks to end
-#         """
-#         if self._state != State.pending:
-#             print('Already done')
-#             return
-#         self._state = State.in_progress
-#         self._initial_data = data or {}
-#         asyncio.ensure_future(self._root_task.run())
-#         done, pending = await asyncio.wait(self._root_task.final_tasks)
-#         self._state = State.done
-#         # for future in done:
-#         #         future.result()
-#         return done
-
-#     async def cancel(self):
-#         """
-#         Recursively cancel all remaining tasks
-#         """
-#         await self._root_task.cancel()
-
+"""
+wfd.add()
+wfd.delete()
+wfd.get()
+wfd.link()
+wfd.unlink()
+wfd.root()
+wfd.validate()
+wfd.from_dict()
+wfd.as_dict()
+"""
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
     loop = asyncio.get_event_loop()
+
+    wf_dict = {
+        "uid": "my-workflow",
+        "tasks": [
+            {"uid": "f1", "name": "fake"},
+            {"uid": "f2", "name": "fake"},
+            {"uid": "f3", "name": "fake"},
+            {"uid": "f4", "name": "fake"},
+            {"uid": "f5", "name": "fake"},
+            {"uid": "f6", "name": "fake"}
+        ],
+        "graph": {
+            "f1": ["f2"],
+            "f2": ["f3", "f4"],
+            "f3": ["f5"],
+            "f4": ["f5"],
+            "f5": ["f6"],
+            "f6": []
+        }
+    }
+    wf_desc = WorkflowDescription.from_dict(wf_dict)
+    print("workflow uid: {}".format(wf_desc.uid))
+    print("workflow graph: {}".format(wf_desc.dag.graph))
+    print("workflow tasks: {}".format(wf_desc.tasks))
