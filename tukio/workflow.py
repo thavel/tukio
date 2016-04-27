@@ -1,31 +1,94 @@
 import logging
 import sys
 import asyncio
-from task import Task
-from broker import Broker
-from threading import Event
+import weakref
 from uuid import uuid4
+from dag import DAG
+from task import Task
 
 
 logger = logging.getLogger(__name__)
 
-# from task import Task, State
+
+class WorkflowError(Exception):
+    pass
+
+
+class WorkflowRootTaskError(WorkflowError):
+    pass
 
 
 class Workflow(object):
     """
-    A workflow ties together a set of tasks as a DAG (Directed Acyclic Graph).
-    A workflow instance can run only once.
+    This class models a workflow. A workflow is a DAG (Directed Acyclic Graph)
+    made up of tasks.
+    This class is meant to hold the description of a workflow; it is not a
+    workflow execution engine.
+    It provides an API to easily build and update a consistent graph.
     """
     def __init__(self):
         # Unique execution ID of the workflow
         self._uid = "-".join(['wf', str(uuid4())[:8]])
+        self._dag = DAG()
+        self._tasks = weakref.WeakValueDictionary()
 
-    def run(self):
-        pass
+    @property
+    def dag(self):
+        return self._dag
 
-    def cancel(self):
-        pass
+    def add_task(self, task):
+        """
+        Adds a new task to the workflow. The task will remain orphan until it
+        is linked to upstream/downstream tasks.
+        This method must be passed a `Task()` instance.
+        """
+        if not isinstance(task, Task):
+            raise TypeError("task must an 'Task()' instance")
+        self.dag.add_node(task)
+        self._tasks[task.uid] = task
+
+    def delete_task(self, task):
+        """
+        Remove a task from the workflow and the links to upstream/downstream
+        tasks.
+        """
+        self.dag.delete_node(task)
+
+    def get_task(self, task_id):
+        """
+        Returns the task object that has the searched task ID. Returns 'None'
+        if the task ID was not found.
+        """
+        return self._tasks.get(task_id, None)
+
+    def root_task(self):
+        """
+        Returns the root task. If no root task or several root tasks were found
+        raises `WorkflowValidationError`.
+        """
+        root_task = self.dag.root_nodes()
+        if len(root_task) == 1:
+            return root_task[0]
+        else:
+            raise WorkflowRootTaskError("expected one root task, "
+                                        "found {}".format(root_task))
+
+    def set_downstream(self, task, down_tasks):
+        """
+        Set a task, or a task task to be directly downstream from the current
+        task.
+        """
+        for dt in down_tasks:
+            self.dag.add_edge(task, dt)
+
+    def set_upstream(self, task, up_tasks):
+        """
+        Set a task, or a task task to be directly upstream from the current
+        task.
+        """
+        for ut in up_tasks:
+            self.dag.add_edge(ut, task)
+
 
 # class Workflow(object):
 
@@ -82,71 +145,8 @@ class Workflow(object):
 #         await self._root_task.cancel()
 
 
-# === Testing ===
-
-class Task1(Task):
-    async def execute(self, data=None):
-        self._event = Event()
-        logger.info('{} ==> hello world #1'.format(self._uid))
-        while not self._event.is_set():
-            await asyncio.sleep(1)
-        logger.info('{} ==> hello world #2'.format(self._uid))
-        await asyncio.sleep(1)
-        logger.info('{} ==> hello world #3'.format(self._uid))
-        await asyncio.sleep(1)
-        logger.info('{} ==> hello world #4'.format(self._uid))
-        return 'Oops I dit it again!'
-
-    def on_event(self, data=None):
-        self._event.set()
-        logger.info('{} ==> Unlocked event'.format(self.uid))
-        logger.info('{} ==> Received data: {}'.format(self.uid, data))
-
-
-class Task2(Task):
-    async def execute(self, data=None):
-        if isinstance(data, Task):
-            logger.info("Input data is task UID={}".format(data.uid))
-        for i in range(3):
-            logger.info("{} ==> fire is coming...".format(self.uid))
-            await asyncio.sleep(1)
-        await self.fire('hello world')
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
     loop = asyncio.get_event_loop()
-
-    ## TEST1
-    # t1 = Task(loop=loop)
-    # t2 = Task(loop=loop)
-    # tasks = [
-    #     asyncio.ensure_future(t1.run(t2)),
-    #     asyncio.ensure_future(t2.run()),
-    # ]
-    # loop.run_until_complete(asyncio.wait(tasks))
-
-    ## TEST2
-    # broker = Broker(loop=loop)
-    # task = Task1(loop=loop, broker=broker)
-    # task.register('toto')
-    # tasks = [
-    #     asyncio.ensure_future(task.run()),
-    #     asyncio.ensure_future(broker.fire('toto', 'hello'))
-    # ]
-    # loop.run_until_complete(asyncio.wait(tasks))
-    # loop.close()
-
-    ## TEST3
-    broker = Broker(loop=loop)
-    t1 = Task1(loop=loop, broker=broker)
-    t2 = Task2(loop=loop, broker=broker)
-    t1.register(t2.uid, t1.on_event)
-    tasks = [
-        asyncio.ensure_future(t1.run(t2)),
-        asyncio.ensure_future(t2.run())
-    ]
-    loop.run_until_complete(asyncio.wait(tasks))
-    loop.close()

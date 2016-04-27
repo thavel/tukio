@@ -22,46 +22,72 @@ def before_run(func):
             func(self, *args, **kwargs)
         else:
             raise RuntimeError("cannot call {} once the task"
-                               " started".format(func))
+                               " has started".format(func))
     return wrapper
 
 
-class ConfigBeforeRun(type):
+# Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
+class RegisteredTask(type):
+    """
+    This metaclass is designed to register automatically all classes that
+    inherit from `Task`. Subclasses of `Task` are indexed according to their
+    `NAME` attribute.
+    """
+    _registry = {}
+
+    def __new__(cls, name, bases, attrs):
+        new_cls = type.__new__(cls, name, bases, attrs)
+        if new_cls.NAME is not None:
+            cls._registry[new_cls.NAME] = new_cls
+        return new_cls
+
+    @classmethod
+    def get(cls, task_name):
+        return cls._registry[task_name]
+
+
+class ConfigBeforeRun(RegisteredTask):
     """
     Ensure the `configure` method will always be decorated so as to prevent its
-    execution at runtime. This works even if a new subclass of `Task` is
-    defined with its own `configure` method.
+    execution at runtime or after task completion. This works even if `Task` is
+    subclassed and `configure` is overriden without explicitly being decorated
+    with `@before_run`.
     """
     def __new__(cls, name, bases, local):
         for attr in local:
             value = local[attr]
             if callable(value) and attr == 'configure':
                 local[attr] = before_run(value)
-        return type.__new__(cls, name, bases, local)
+        return super().__new__(cls, name, bases, local)
+        # return type.__new__(cls, name, bases, local)
 
 
-class Task(object, metaclass=ConfigBeforeRun):
+class Task(metaclass=ConfigBeforeRun):
     """
     A task is a standalone object that executes some logic. While executing, it
     may receive and/or throw events.
     It is the smallest piece of a workflow and is not aware of previous/next
     tasks it may be linked to in the workflow.
-    A task can be configured with a dict-like object.
+    A task can be configured with a dict-like object. If the config dict has a
+    'timeout' key, it will be used as the task's timeout (a task has no timeout
+    by default).
     """
-    # __metaclass__ = ConfigBeforeRun
+    # All subclasses of `Task` will be automatically registered with a name.
+    NAME = None
 
-    def __init__(self, config=None, timeout=None, loop=None, broker=None):
+    def __init__(self, config={}, loop=None, broker=None):
         # Unique execution ID of the task
         self._uid = "-".join(['task', str(uuid4())[:8]])
         self._loop = loop or asyncio.get_event_loop()
-        # self._workflow = workflow
-        self._timeout = timeout
         self._broker = broker
         self._future = None
         self._result = None
-        if config is not None:
-            # `config` must be a dictionary
+        # `config` must be a dictionary
+        if config:
+            self._timeout = config.get('timeout', None)
             self.configure(**config)
+        else:
+            self._timeout = None
 
     @property
     def uid(self):
@@ -180,6 +206,61 @@ class Task(object, metaclass=ConfigBeforeRun):
         pass
 
 
+class TypedAttribute(object):
+    """
+    A descriptor to enforce typed attribute, control attribute setting and
+    prevent from deletion.
+    (see Python doc for more details about the descriptor protocol)
+    """
+    def __init__(self, attrname, attrtype, default=None):
+        self.attrname = attrname
+        self.name = "_" + attrname
+        self.attrtype = attrtype
+        self.default = default if default else attrtype()
+
+    def __get__(self, instance, cls):
+        return getattr(instance, self.name, self.default)
+
+    def __set__(self, instance, value):
+        if not isinstance(value, self.attrtype):
+            raise TypeError("Must be a {}".format(self.attrtype))
+        setattr(instance, self.name, value)
+
+    def __delete__(self, instance):
+        raise AttributeError("Can't delete attribute {}".format(self.attrname))
+
+
+class TaskDescription(object):
+    """
+    The complete description of a task is made of the registered name of the
+    class that implements it and its configuration (dict).
+    The class that implements the task must be a sub-class of `Task()`.
+    With both of these attributes, an instance of task can be created and run.
+    Optional `loop` and `broker` attributes can be set to be used in the
+    instances of tasks created from the description.
+    """
+    name = TypedAttribute(attrname='name', attrtype=str, default='')
+    config = TypedAttribute(attrname='config', attrtype=dict, default={})
+
+    def __init__(self, name, config={}, loop=None, broker=None):
+        self.name = name
+        self.config = config or {}
+        self.loop = loop
+        self.broker = broker
+
+    def new_task(self, loop=None, broker=None):
+        """
+        Create a new instance of task from the description. The default event
+        loop and event broker configured in the description can be overrridden.
+        """
+        if not self.name:
+            raise ValueError("no task name in the description")
+        t_loop = loop or self.loop
+        t_broker = broker or self.broker
+        klass = RegisteredTask.get(self.name)
+        return klass(self.config, t_loop, t_broker)
+
+
 if __name__ == '__main__':
     import sys
     from broker import Broker
@@ -187,7 +268,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
-    loop = asyncio.get_event_loop()
+    ioloop = asyncio.get_event_loop()
 
     class Task1(Task):
         async def execute(self, data=None):
@@ -229,17 +310,17 @@ if __name__ == '__main__':
                 await asyncio.sleep(1)
             await self.fire('hello world')
 
-    broker = Broker(loop=loop)
+    broker = Broker(loop=ioloop)
 
     # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
     config = {'dummy': 'world'}
-    t1 = Task1(config=config, broker=broker, loop=loop)
+    t1 = Task1(config=config, broker=broker, loop=ioloop)
 
     # Must raise InvalidStateError
     # t1.result()
 
-    loop.run_until_complete(t1.run('continue'))
+    ioloop.run_until_complete(t1.run('continue'))
     print("Task is done?: {}".format(t1.done()))
 
     # Must raise RuntimeError
@@ -252,21 +333,21 @@ if __name__ == '__main__':
 
     # TEST2: run 2 tasks running in parallel and using the broker
     print("+++++++ TEST2")
-    t1 = Task1(config=config, loop=loop, broker=broker)
-    t2 = Task2(loop=loop, broker=broker)
+    t1 = Task1(config=config, loop=ioloop, broker=broker)
+    t2 = Task2(loop=ioloop, broker=broker)
     t1.register(t2.uid, t1.on_event)
     tasks = [
         asyncio.ensure_future(t1.run()),
         asyncio.ensure_future(t2.run())
     ]
-    loop.run_until_complete(asyncio.wait(tasks))
+    ioloop.run_until_complete(asyncio.wait(tasks))
 
     # TEST3: cancel a task before running
     print("+++++++ TEST3")
     config = {'dummy': 'world'}
-    t1 = Task1(config=config, broker=broker, loop=loop)
+    t1 = Task1(config=config, broker=broker, loop=ioloop)
     t1.cancel()
-    loop.run_until_complete(t1.run('continue'))
+    ioloop.run_until_complete(t1.run('continue'))
     print("Task is cancelled?: {}".format(t1.cancelled()))
 
-    loop.close()
+    ioloop.close()

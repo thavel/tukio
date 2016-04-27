@@ -46,37 +46,34 @@ class DAG(object):
         self.graph[predecessor].add(successor)
         try:
             self.validate()
-        except DAGValidationError as exc:
+        except (KeyError, DAGValidationError) as exc:
             # Rollback the last update if it breaks the DAG
             self.graph[predecessor].remove(successor)
             raise exc
 
-    def delete_edge(self, predecessor, successor, graph=None):
+    def delete_edge(self, predecessor, successor):
         """
         Delete an edge from the graph.
         """
-        graph = graph or self.graph
-        if successor not in graph.get(predecessor, []):
+        if successor not in self.graph.get(predecessor, []):
             raise KeyError('this edge does not exist in graph')
-        graph[predecessor].remove(successor)
+        self.graph[predecessor].remove(successor)
 
-    def predecessors(self, node, graph=None):
+    def predecessors(self, node):
         """
         Returns the list of all predecessors of the given node
         """
-        graph = graph or self.graph
-        if node not in graph:
+        if node not in self.graph:
             raise KeyError('node %s is not in graph' % node)
-        return [key for key in graph if node in graph[key]]
+        return [key for key in self.graph if node in self.graph[key]]
 
-    def successors(self, node, graph=None):
+    def successors(self, node):
         """
         Returns the list of all successors of the given node
         """
-        graph = graph or self.graph
-        if node not in graph:
+        if node not in self.graph:
             raise KeyError('node %s is not in graph' % node)
-        return list(graph[node])
+        return list(self.graph[node])
 
     def leaves(self):
         """
@@ -140,37 +137,55 @@ class DAG(object):
         Topological ordering of the DAG using Kahn's algorithm. This algorithm
         detects cycles, hence ensures the graph is a DAG.
         """
-        graph = deepcopy(self.graph)
+        dag = self.copy()
         sorted_nodes = []
-        root_nodes = set(self.root_nodes())
+        root_nodes = set(dag.root_nodes())
         while root_nodes:
             root = root_nodes.pop()
             sorted_nodes.append(root)
             # Walk through the successors of `root` to remove all its outgoing
             # edges.
-            for node in graph[root].copy():
-                self.delete_edge(root, node, graph)
-                if not self.predecessors(node, graph):
+            for node in dag.graph[root].copy():
+                dag.delete_edge(root, node)
+                if not dag.predecessors(node):
                     root_nodes.add(node)
-        if self.edges(graph):
+        if dag.edges():
             raise DAGValidationError('graph is not acyclic')
         else:
             return sorted_nodes
 
-    def edges(self, graph=None):
+    def edges(self):
         """
         Return a list of all edges in the graph (without duplicates)
         """
-        graph = graph or self.graph
         edges = set()
-        for node in graph:
-            for successor in graph[node]:
+        for node in self.graph:
+            for successor in self.graph[node]:
                 edges.add((node, successor))
         return list(edges)
 
+    def copy(self):
+        """
+        Returns a copy of the DAG instance.
+        """
+        graph = deepcopy(self.graph)
+        dag = DAG()
+        dag.graph = graph
+        return dag
+
 
 if __name__ == '__main__':
-    graph = {
+    # a, b, c = object(), object(), object()
+    # d, e, f = object(), object(), object()
+    # mygraph = {
+    #     a: [b],
+    #     b: [c, d, e],
+    #     c: [e],
+    #     d: [e],
+    #     e: [],
+    #     f: []
+    # }
+    mygraph = {
         'A': ['B'],
         'B': ['C', 'D', 'E'],
         'C': ['E'],
@@ -178,6 +193,6 @@ if __name__ == '__main__':
         'E': [],
         'F': []
     }
-    dag = DAG.from_dict(graph)
-    print("root nodes are: {}".format(dag.root_nodes()))
-    print("DAG is ok: {}".format(dag.graph))
+    mydag = DAG.from_dict(mygraph)
+    print("root nodes are: {}".format(mydag.root_nodes()))
+    print("DAG is ok: {}".format(mydag.graph))
