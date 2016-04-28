@@ -3,8 +3,8 @@ import sys
 import asyncio
 import weakref
 from uuid import uuid4
-from dag import DAG
-from task import TaskDescription
+from tukio.dag import DAG
+from tukio.task import TaskDescription
 
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,22 @@ class WorkflowDescription(object):
                 down_desc = wf_desc.get(down_id)
                 wf_desc.link(up_desc, down_desc)
         return wf_desc
+
+    def as_dict(self):
+        """
+        Build a dictionary that represents the current workflow description
+        object.
+        """
+        wf_dict = {"uid": self.uid, "tasks": [], "graph": {}}
+        for task_id, task_desc in self.tasks.items():
+            task_dict = {"uid": task_id, "name": task_desc.name}
+            if task_desc.config:
+                task_dict['config'] = task_desc.config
+            wf_dict['tasks'].append(task_dict)
+        for up_desc, down_descs_set in self.dag.graph.items():
+            _record = {up_desc.uid: list(map(lambda x: x.uid, down_descs_set))}
+            wf_dict['graph'].update(_record)
+        return wf_dict
 
 
 """
