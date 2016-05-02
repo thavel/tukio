@@ -1,8 +1,9 @@
+import asyncio
 import logging
 import sys
-import asyncio
-import weakref
 from uuid import uuid4
+import weakref
+
 from tukio.dag import DAG
 from tukio.task import TaskDescription
 
