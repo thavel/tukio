@@ -20,6 +20,7 @@ class WorkflowRootTaskError(WorkflowError):
 
 
 class WorkflowDescription(object):
+
     """
     A workflow description is a DAG (Directed Acyclic Graph) made up of task
     description objects (`TaskDescription`). This class is not a workflow
@@ -27,6 +28,7 @@ class WorkflowDescription(object):
     It provides an API to easily build and update a consistent workflow as well
     as created runnable workflow instances.
     """
+
     def __init__(self, uid=None):
         # Unique execution ID of the workflow
         self._uid = uid or "-".join(['wf', str(uuid4())[:8]])

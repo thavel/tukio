@@ -28,17 +28,18 @@ def before_run(func):
 
 # Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
 class RegisteredTask(type):
+
     """
     This metaclass is designed to register automatically all classes that
     inherit from `Task`. Subclasses of `Task` are indexed according to their
     `NAME` attribute.
     """
+
     _registry = {}
 
     def __new__(cls, name, bases, attrs):
-        new_cls = type.__new__(cls, name, bases, attrs)
-        if new_cls.NAME is not None:
-            cls._registry[new_cls.NAME] = new_cls
+        new_cls = super().__new__(cls, name, bases, attrs)
+        cls._registry[new_cls.NAME or new_cls.__name__.lower()] = new_cls
         return new_cls
 
     @classmethod
@@ -47,22 +48,24 @@ class RegisteredTask(type):
 
 
 class ConfigBeforeRun(RegisteredTask):
+
     """
     Ensure the `configure` method will always be decorated so as to prevent its
     execution at runtime or after task completion. This works even if `Task` is
     subclassed and `configure` is overriden without explicitly being decorated
     with `@before_run`.
     """
+
     def __new__(cls, name, bases, local):
         for attr in local:
             value = local[attr]
             if callable(value) and attr == 'configure':
                 local[attr] = before_run(value)
         return super().__new__(cls, name, bases, local)
-        # return type.__new__(cls, name, bases, local)
 
 
 class Task(metaclass=ConfigBeforeRun):
+
     """
     A task is a standalone object that executes some logic. While executing, it
     may receive and/or throw events.
@@ -72,6 +75,7 @@ class Task(metaclass=ConfigBeforeRun):
     'timeout' key, it will be used as the task's timeout (a task has no timeout
     by default).
     """
+
     # All subclasses of `Task` will be automatically registered with a name.
     NAME = None
 
@@ -206,31 +210,8 @@ class Task(metaclass=ConfigBeforeRun):
         pass
 
 
-class TypedAttribute(object):
-    """
-    A descriptor to enforce typed attribute, control attribute setting and
-    prevent from deletion.
-    (see Python doc for more details about the descriptor protocol)
-    """
-    def __init__(self, attrname, attrtype, default=None):
-        self.attrname = attrname
-        self.name = "_" + attrname
-        self.attrtype = attrtype
-        self.default = default if default else attrtype()
-
-    def __get__(self, instance, cls):
-        return getattr(instance, self.name, self.default)
-
-    def __set__(self, instance, value):
-        if not isinstance(value, self.attrtype):
-            raise TypeError("Must be a {}".format(self.attrtype))
-        setattr(instance, self.name, value)
-
-    def __delete__(self, instance):
-        raise AttributeError("Can't delete attribute {}".format(self.attrname))
-
-
 class TaskDescription(object):
+
     """
     The complete description of a task is made of the registered name of the
     class that implements it and its configuration (dict).
@@ -239,13 +220,14 @@ class TaskDescription(object):
     Optional `loop` and `broker` attributes can be set to be used in the
     instances of tasks created from the description.
     """
-    name = TypedAttribute(attrname='name', attrtype=str, default='')
-    config = TypedAttribute(attrname='config', attrtype=dict, default={})
+
+    name = None
+    config = None
 
     def __init__(self, name, config=None, loop=None, broker=None, uid=None):
         self._uid = uid or "-".join(['task-desc', str(uuid4())[:8]])
         self.name = name
-        self.config = config or {}
+        self.config = config or dict()
         self.loop = loop
         self.broker = broker
 

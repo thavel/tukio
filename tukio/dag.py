@@ -9,10 +9,12 @@ class DAGValidationError(Exception):
 
 
 class DAG(object):
+
     """
     Directed Acyclic Graph (DAG) implementation. This implementation uses an
     adjacency list to represent the graph.
     """
+
     def __init__(self):
         self.graph = {}
 

@@ -5,13 +5,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _ensure_coroutine(callback):
-    if not asyncio.iscoroutinefunction(callback):
-        return asyncio.coroutine(callback)
-    return callback
-
-
 class Broker(object):
+
     """
     The workflow engine has a global event broker that gathers external
     (e.g. from the network) and internal events (e.g. from tasks) and schedules
@@ -19,6 +14,7 @@ class Broker(object):
     A event is fired with a topic. Registered handlers are executed each time
     an event is fired on that topic.
     """
+
     def __init__(self, loop=None):
         self._loop = loop or asyncio.get_event_loop()
         self._handlers = {}
@@ -40,8 +36,10 @@ class Broker(object):
         Register a handler to be executed upon receiving events in a given
         topic.
         """
-        coro = _ensure_coroutine(handler)
+        if not asyncio.iscoroutinefunction(handler):
+            raise ValueError('handler must be a coroutine')
+
         try:
-            self._handlers[topic].append(coro)
+            self._handlers[topic].append(handler)
         except KeyError:
-            self._handlers[topic] = [coro]
+            self._handlers[topic] = [handler]
