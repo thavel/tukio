@@ -1,6 +1,6 @@
 import asyncio
-from functools import wraps
 import logging
+import abc
 from uuid import uuid4
 
 
@@ -11,23 +11,8 @@ class TaskNoBrokerError(Exception):
     pass
 
 
-def before_run(func):
-    """
-    A simple decorator to prevent the execution of `func` after the task has
-    been started.
-    """
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if self._future is None:
-            func(self, *args, **kwargs)
-        else:
-            raise RuntimeError("cannot call {} once the task"
-                               " has started".format(func))
-    return wrapper
-
-
 # Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
-class RegisteredTask(type):
+class RegisteredTask(abc.ABCMeta):
 
     """
     This metaclass is designed to register automatically all classes that
@@ -47,49 +32,75 @@ class RegisteredTask(type):
         return cls._registry[task_name]
 
 
-class ConfigBeforeRun(RegisteredTask):
+class _BaseTask(asyncio.Task):
 
     """
-    Ensure the `configure` method will always be decorated so as to prevent its
-    execution at runtime or after task completion. This works even if `Task` is
-    subclassed and `configure` is overriden without explicitly being decorated
-    with `@before_run`.
+    A subclass of `asyncio.Task()` that does not schedule the execution of the
+    coroutine at instantiation. A call to `_BaseTask.run()` does that job thus
+    enabling better control over the scheduling of the execution of the
+    coroutine.
     """
 
-    def __new__(cls, name, bases, local):
-        for attr in local:
-            value = local[attr]
-            if callable(value) and attr == 'configure':
-                local[attr] = before_run(value)
-        return super().__new__(cls, name, bases, local)
+    def __init__(self, coro_fn, *, loop=None):
+        """
+        Takes a coroutine function instead of a coroutine object as argument.
+        """
+        assert asyncio.iscoroutinefunction(coro_fn), repr(coro_fn)
+        asyncio.Future.__init__(self, loop=loop)
+        if self._source_traceback:
+            del self._source_traceback[-1]
+        self._coro_fn = coro_fn
+        self._coro = None
+        self._fut_waiter = None
+        self._must_cancel = False
+        self._inputs = None
+        # removed the scheduling of the coroutine and addition to the loop's
+        # tasks.
+
+    def run(self, inputs=None):
+        """
+        Create the coroutine object to run and schedules its execution in the
+        task's event loop. It also adds the task to the list of loop's tasks.
+        """
+        self._inputs = inputs
+        self._coro = self._coro_fn(inputs)
+        self._loop.call_soon(self._step)
+        self.__class__._all_tasks.add(self)
 
 
-class Task(metaclass=ConfigBeforeRun):
+class Task(_BaseTask, metaclass=RegisteredTask):
 
     """
-    A task is a standalone object that executes some logic. While executing, it
-    may receive and/or throw events.
+    A task is a standalone object that executes some logic.
     It is the smallest piece of a workflow and is not aware of previous/next
     tasks it may be linked to in the workflow.
     A task can be configured with a dict-like object. If the config dict has a
     'timeout' key, it will be used as the task's timeout (a task has no timeout
     by default).
+    Cleanup actions on cancel or timeout can be implemented (noop by default)
+    by overriding `Task.on_cancel()` or `Task.on_timeout()` methods.
     """
 
-    # All subclasses of `Task` will be automatically registered with a name.
+    # All subclasses of `Task` will be automatically registered with that name.
+    # It is recommended to choose an short lowercase string, hyphen-separated
+    # if required (e.g. 'my-task').
     NAME = None
 
-    def __init__(self, config=None, loop=None, broker=None):
+    def __init__(self, config=None, loop=None):
+        """
+        Force the wrapping of the coroutine `Task.execute()` into the task and
+        takes a new `config` dict-like argument that may be used by the
+        coroutine at runtime.
+        Before being wrapped into the task, `Task.execute()` is wrapped into
+        another coroutine function that makes it timeout-able and calls
+        cancel and timeout callbacks.
+        """
+        super().__init__(self._run_with_timeout, loop=loop)
         # Unique execution ID of the task
-        self._uid = "-".join(['task', str(uuid4())[:8]])
-        self._loop = loop or asyncio.get_event_loop()
-        self._broker = broker
-        self._future = None
-        self._result = None
-        # `config` must be a dictionary
+        self._uid = "-".join([str(self.NAME), str(uuid4())[:8]])
+        # `config` is expected to be a dict-like object
         if config:
-            self._timeout = config.get('timeout', None)
-            self.configure(**config)
+            self._timeout = config.pop('timeout', None)
         else:
             self._timeout = None
 
@@ -97,117 +108,47 @@ class Task(metaclass=ConfigBeforeRun):
     def uid(self):
         return self._uid
 
-    @property
-    def loop(self):
+    async def _run_with_timeout(self, inputs):
         """
-        Read-only attribute to access the event loop.
+        Wraps the coroutine `Task.execute()`
         """
-        return self._loop
-
-    def configure(self, **kwargs):
-        """
-        Configure the task prior to running it. Override this method to setup
-        your own configuration.
-        This method is automatically decorated with `@before_run`.
-        """
-        raise NotImplementedError
-
-    async def run(self, data=None):
-        """
-        A task can run only once and can either be cancel or timeout.
-        """
-        if self._future is None:
-            self._future = asyncio.ensure_future(self.execute(data),
-                                                 loop=self.loop)
+        print("self: type={} and str={}".format(type(self), str(self)))
+        coro = self.execute(inputs)
+        self._future = fut = asyncio.ensure_future(coro, loop=self._loop)
         try:
-            await asyncio.wait_for(self._future, self._timeout, loop=self.loop)
-        except asyncio.TimeoutError:
+            await asyncio.wait_for(fut, self._timeout, loop=self._loop)
+        except asyncio.TimeoutError as exc:
             logger.warning("task '{}' timed out".format(self.uid))
-            await self.on_timeout(data)
-        except asyncio.CancelledError:
+            await self.on_timeout()
+            self.set_exception(exc)
+        except asyncio.CancelledError as exc:
             logger.warning("task '{}' has been cancelled".format(self.uid))
-            await self.on_cancel(data)
-        else:
-            return self._future.result()
+            await self.on_cancel()
+        finally:
+            return fut.result()
 
-    def cancel(self):
+    @abc.abstractmethod
+    async def execute(self, inputs):
         """
-        Cancel the task.
-        The behavior of this method stick to `asyncio.Future.cancel()`.
+        This is the coroutine wrapped in the task. It holds the logic to
+        execute. Override this method in each subclass of `Task()` to implement
+        your own custom task.
+        This coroutine can be cancelled or reach timeout.
         """
-        if self._future is None:
-            self._future = asyncio.Future()
-        return self._future.cancel()
 
-    def cancelled(self):
+    async def on_cancel(self):
         """
-        Return True if the future was cancelled.
-        The behavior of this method stick to `asyncio.Future.cancelled()`.
+        Override this method if you want to implement cleanup actions on
+        cancel. This method may update task's result.
+        No-Op by default.
         """
-        if self._future is None:
-            return False
-        return self._future.cancelled()
 
-    def result(self):
+    async def on_timeout(self):
         """
-        Return the result of the task.
-        The behavior of this method stick to `asyncio.Future.result()`.
+        Override this method if you want to implement cleanup actions on
+        timeout. This method may update task's result.
+        No-Op by default.
         """
-        if self._future is None:
-            # Raises InvalidStateError
-            return asyncio.Future().result()
-        return self._future.result()
-
-    def done(self):
-        """
-        Return True if the task is done.
-        Done means either that a result / exception are available, or that the
-        task was cancelled.
-        The behavior of this method stick to `asyncio.Future.done()`.
-        """
-        if self._future is None:
-            return False
-        return self._future.done()
-
-    async def execute(self, data=None):
-        """
-        Override this method to code your own logic.
-        """
-        raise NotImplementedError
-
-    def register(self, topic, handler):
-        """
-        A simple wrapper to register handlers from within the task. Note that
-        a task cannot handle its own events.
-        """
-        if self._broker is None:
-            raise TaskNoBrokerError
-        if topic == self.uid:
-            raise ValueError("A task cannot handle its own events")
-        self._broker.register(topic, handler)
-
-    async def fire(self, data):
-        """
-        A simple wrapper to fire an event from within the task. A task always
-        fire events on a topic identified by its own UID.
-        """
-        if self._broker is None:
-            raise TaskNoBrokerError
-        await self._broker.fire(self.uid, data)
-
-    async def on_timeout(self, data=None):
-        """
-        This method is executed on timeout. Override this method to code your
-        own logic (noop by default).
-        """
-        pass
-
-    async def on_cancel(self, data=None):
-        """
-        This method is executed on cancel. Override this method to code your
-        own logic (noop by default).
-        """
-        pass
 
 
 class TaskDescription(object):
@@ -274,11 +215,11 @@ if __name__ == '__main__':
     ioloop = asyncio.get_event_loop()
 
     class Task1(Task):
-        async def execute(self, data=None):
+        async def execute(self, inputs=None):
             self._event = Event()
-            if data is not None:
-                self._event.set()
-            logger.info('{} ==> {}'.format(self.uid, self.myconfig))
+            # if inputs is not None:
+            self._event.set()
+            logger.info('{} ==> {}'.format(self.uid, inputs))
             logger.info('{} ==> hello world #1'.format(self.uid))
             while not self._event.is_set():
                 await asyncio.sleep(1)
@@ -289,10 +230,10 @@ if __name__ == '__main__':
             logger.info('{} ==> hello world #4'.format(self.uid))
             return 'Oops I dit it again!'
 
-        def on_event(self, data=None):
+        def on_event(self, inputs=None):
             self._event.set()
             logger.info('{} ==> Unlocked event'.format(self.uid))
-            logger.info('{} ==> Received data: {}'.format(self.uid, data))
+            logger.info('{} ==> Received inputs: {}'.format(self.uid, inputs))
 
         def configure(self, dummy=None, other=None):
             if dummy is None and other is None:
@@ -300,30 +241,36 @@ if __name__ == '__main__':
             else:
                 self.myconfig = 'got config: {} and {}'.format(dummy, other)
 
-        async def on_cancel(self, data=None):
+        async def on_cancel(self, inputs=None):
             logger.info("called 'on_cancel' handler")
 
     class Task2(Task):
-        async def execute(self, data=None):
-            if isinstance(data, Task):
-                logger.info("Input data is task UID={}".format(data.uid))
+        async def execute(self, inputs=None):
+            if isinstance(inputs, Task):
+                logger.info("Input data is task UID={}".format(inputs.uid))
             for _ in range(3):
                 logger.info("{} ==> fire is coming...".format(self.uid))
                 await asyncio.sleep(1)
-            await self.fire('hello world')
+            # await self.fire('hello world')
 
     brokr = Broker(loop=ioloop)
 
     # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
     cfg = {'dummy': 'world'}
-    t1 = Task1(config=cfg, broker=brokr, loop=ioloop)
+    t1 = Task1(config=cfg, loop=ioloop)
 
     # Must raise InvalidStateError
-    # t1.result()
+    try:
+        t1.result()
+    except asyncio.InvalidStateError as exc:
+        print("raised {}".format(str(exc)))
 
-    ioloop.run_until_complete(t1.run('continue'))
+    # Schedule the execution of the task and run it.
+    t1.run()
+    ioloop.run_until_complete(asyncio.wait([t1]))
     print("Task is done?: {}".format(t1.done()))
+    print("Task's result is: {}".format(t1.result()))
 
     # Must raise RuntimeError
     # t1.configure(**cfg)
@@ -334,22 +281,22 @@ if __name__ == '__main__':
     # print(t1.result())
 
     # TEST2: run 2 tasks running in parallel and using the broker
-    print("+++++++ TEST2")
-    t1 = Task1(config=cfg, loop=ioloop, broker=brokr)
-    t2 = Task2(loop=ioloop, broker=brokr)
-    t1.register(t2.uid, t1.on_event)
-    tasks = [
-        asyncio.ensure_future(t1.run()),
-        asyncio.ensure_future(t2.run())
-    ]
-    ioloop.run_until_complete(asyncio.wait(tasks))
+    # print("+++++++ TEST2")
+    # t1 = Task1(config=cfg, loop=ioloop, broker=brokr)
+    # t2 = Task2(loop=ioloop, broker=brokr)
+    # t1.register(t2.uid, t1.on_event)
+    # tasks = [
+    #     asyncio.ensure_future(t1.run()),
+    #     asyncio.ensure_future(t2.run())
+    # ]
+    # ioloop.run_until_complete(asyncio.wait(tasks))
 
     # TEST3: cancel a task before running
-    print("+++++++ TEST3")
-    cfg = {'dummy': 'world'}
-    t1 = Task1(config=cfg, broker=brokr, loop=ioloop)
-    t1.cancel()
-    ioloop.run_until_complete(t1.run('continue'))
-    print("Task is cancelled?: {}".format(t1.cancelled()))
+    # print("+++++++ TEST3")
+    # cfg = {'dummy': 'world'}
+    # t1 = Task1(config=cfg, broker=brokr, loop=ioloop)
+    # t1.cancel()
+    # ioloop.run_until_complete(t1.run('continue'))
+    # print("Task is cancelled?: {}".format(t1.cancelled()))
 
     ioloop.close()
