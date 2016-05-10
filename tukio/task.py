@@ -1,192 +1,116 @@
+"""
+That module assumes that a Tukio task fully relies on `asyncio.Task`.
+Hence the complete logic of a task is described through a coroutine function or
+method.
+It provides a registry class and a set of handful functions to deal with those
+coroutines and schedule their execution in an event loop.
+"""
 import asyncio
 import logging
-import abc
+import functools
 from uuid import uuid4
 
 
 logger = logging.getLogger(__name__)
 
 
-class TaskNoBrokerError(Exception):
-    pass
-
-
 # Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
-class RegisteredTask(abc.ABCMeta):
+class _TaskRegistry(object):
 
     """
-    This metaclass is designed to register automatically all classes that
-    inherit from `Task`. Subclasses of `Task` are indexed according to their
-    `NAME` attribute.
+    This class is designed to be a registry of all functions and methods that
+    implement a Tukio task. Functions or methods are registered by name.
     """
 
-    _registry = {}
-
-    def __new__(cls, name, bases, attrs):
-        new_cls = super().__new__(cls, name, bases, attrs)
-        cls._registry[new_cls.NAME or new_cls.__name__.lower()] = new_cls
-        return new_cls
+    _registry = dict()
 
     @classmethod
-    def get(cls, task_name):
-        return cls._registry[task_name]
+    def register(cls, func, task_name):
+        """
+        Adds the function or method `func` to the registry dict.
+        """
+        if task_name in cls._registry:
+            raise ValueError("task '{}' already registered with "
+                             "{}".format(task_name, cls._registry[task_name]))
+        cls._registry[task_name] = func
 
 
-class _BaseTask(asyncio.Task):
-
+def register(task_name):
     """
-    A subclass of `asyncio.Task()` that does not schedule the execution of the
-    coroutine at instantiation. A call to `_BaseTask.run()` does that job thus
-    enabling better control over the scheduling of the execution of the
-    coroutine.
+    A simple decorator to register a function or a method as a Tukio task.
     """
-
-    def __init__(self, coro_fn, *, loop=None):
-        """
-        Takes a coroutine function instead of a coroutine object as argument.
-        """
-        assert asyncio.iscoroutinefunction(coro_fn), repr(coro_fn)
-        asyncio.Future.__init__(self, loop=loop)
-        if self._source_traceback:
-            del self._source_traceback[-1]
-        self._coro_fn = coro_fn
-        self._coro = None
-        self._fut_waiter = None
-        self._must_cancel = False
-        self._inputs = None
-        # removed the scheduling of the coroutine and addition to the loop's
-        # tasks.
-
-    def run(self, inputs=None):
-        """
-        Create the coroutine object to run and schedules its execution in the
-        task's event loop. It also adds the task to the list of loop's tasks.
-        """
-        self._inputs = inputs
-        self._coro = self._coro_fn(inputs)
-        self._loop.call_soon(self._step)
-        self.__class__._all_tasks.add(self)
+    def decorator(func):
+        _TaskRegistry.register(func, task_name)
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
-class Task(_BaseTask, metaclass=RegisteredTask):
-
+def get_coro_fn(task_name):
     """
-    A task is a standalone object that executes some logic.
-    It is the smallest piece of a workflow and is not aware of previous/next
-    tasks it may be linked to in the workflow.
-    A task can be configured with a dict-like object. If the config dict has a
-    'timeout' key, it will be used as the task's timeout (a task has no timeout
-    by default).
-    Cleanup actions on cancel or timeout can be implemented (noop by default)
-    by overriding `Task.on_cancel()` or `Task.on_timeout()` methods.
+    Returns the function or method registered as `task_name`.
     """
+    return _TaskRegistry._registry[task_name]
 
-    # All subclasses of `Task` will be automatically registered with that name.
-    # It is recommended to choose an short lowercase string, hyphen-separated
-    # if required (e.g. 'my-task').
-    NAME = None
 
-    def __init__(self, config=None, loop=None):
-        """
-        Force the wrapping of the coroutine `Task.execute()` into the task and
-        takes a new `config` dict-like argument that may be used by the
-        coroutine at runtime.
-        Before being wrapped into the task, `Task.execute()` is wrapped into
-        another coroutine function that makes it timeout-able and calls
-        cancel and timeout callbacks.
-        """
-        super().__init__(self._run_with_timeout, loop=loop)
-        # Unique execution ID of the task
-        self._uid = "-".join([str(self.NAME), str(uuid4())[:8]])
-        # `config` is expected to be a dict-like object
-        if config:
-            self._timeout = config.pop('timeout', None)
-        else:
-            self._timeout = None
+def all_task_names():
+    """
+    Returns the list of all task names.
+    """
+    return list(_TaskRegistry._registry.keys())
 
-    @property
-    def uid(self):
-        return self._uid
 
-    async def _run_with_timeout(self, inputs):
-        """
-        Wraps the coroutine `Task.execute()`
-        """
-        print("self: type={} and str={}".format(type(self), str(self)))
-        coro = self.execute(inputs)
-        self._future = fut = asyncio.ensure_future(coro, loop=self._loop)
-        try:
-            await asyncio.wait_for(fut, self._timeout, loop=self._loop)
-        except asyncio.TimeoutError as exc:
-            logger.warning("task '{}' timed out".format(self.uid))
-            await self.on_timeout()
-            self.set_exception(exc)
-        except asyncio.CancelledError as exc:
-            logger.warning("task '{}' has been cancelled".format(self.uid))
-            await self.on_cancel()
-        finally:
-            return fut.result()
+def _make_task_uid(task_name):
+    """
+    Returns a unique ID to tag an `asyncio.Task` instance with.
+    """
+    return "-".join([str(task_name), str(uuid4())[:8]])
 
-    @abc.abstractmethod
-    async def execute(self, inputs):
-        """
-        This is the coroutine wrapped in the task. It holds the logic to
-        execute. Override this method in each subclass of `Task()` to implement
-        your own custom task.
-        This coroutine can be cancelled or reach timeout.
-        """
 
-    async def on_cancel(self):
-        """
-        Override this method if you want to implement cleanup actions on
-        cancel. This method may update task's result.
-        No-Op by default.
-        """
-
-    async def on_timeout(self):
-        """
-        Override this method if you want to implement cleanup actions on
-        timeout. This method may update task's result.
-        No-Op by default.
-        """
+def run_task(task_name, *args, loop=None, **kwargs):
+    """
+    Schedules the execution of the coroutine registered as `task_name` and
+    returns the resulting `asyncio.Task` instance.
+    """
+    coro_fn = get_coro_fn(task_name)
+    coro = coro_fn(*args, **kwargs)
+    task = asyncio.ensure_future(coro, loop=loop)
+    # Add useful attributes to the instance of `asyncio.Task`.
+    task.uid = _make_task_uid(task_name)
+    task.inputs = (args, kwargs)
+    return task
 
 
 class TaskDescription(object):
 
     """
     The complete description of a task is made of the registered name of the
-    class that implements it and its configuration (dict).
-    The class that implements the task must be a sub-class of `Task()`.
-    With both of these attributes, an instance of task can be created and run.
-    Optional `loop` and `broker` attributes can be set to be used in the
-    instances of tasks created from the description.
+    coroutine that implements it and its configuration (a dict).
+    With the config dict and and input data (optional) passed as arguments, an
+    instance of task can be created and run.
     """
 
     name = None
     config = None
 
-    def __init__(self, name, config=None, loop=None, broker=None, uid=None):
+    def __init__(self, name, config=None, uid=None):
         self._uid = uid or "-".join(['task-desc', str(uuid4())[:8]])
         self.name = name
         self.config = config or dict()
-        self.loop = loop
-        self.broker = broker
 
     @property
     def uid(self):
         return self._uid
 
-    def new_task(self, loop=None, broker=None):
+    def run_task(self, *args, loop=None, **kwargs):
         """
-        Create a new instance of task from the description. The default event
-        loop and event broker configured in the description can be overrridden.
+        Pass the config dict and input data as arguments to the coroutine
+        function and schedule its execution in the event loop.
         """
-        if not self.name:
-            raise ValueError("no task name in the description")
-        t_loop = loop or self.loop
-        t_broker = broker or self.broker
-        klass = RegisteredTask.get(self.name)
-        return klass(self.config, t_loop, t_broker)
+        return run_task(self.name, *args, loop=loop,
+                        config=self.config, **kwargs)
 
     @classmethod
     def from_dict(cls, task_dict):
@@ -214,51 +138,22 @@ if __name__ == '__main__':
                         handlers=[logging.StreamHandler(sys.stdout)])
     ioloop = asyncio.get_event_loop()
 
-    class Task1(Task):
-        async def execute(self, inputs=None):
-            self._event = Event()
-            # if inputs is not None:
-            self._event.set()
-            logger.info('{} ==> {}'.format(self.uid, inputs))
-            logger.info('{} ==> hello world #1'.format(self.uid))
-            while not self._event.is_set():
-                await asyncio.sleep(1)
-            logger.info('{} ==> hello world #2'.format(self.uid))
-            await asyncio.sleep(1)
-            logger.info('{} ==> hello world #3'.format(self.uid))
-            await asyncio.sleep(1)
-            logger.info('{} ==> hello world #4'.format(self.uid))
-            return 'Oops I dit it again!'
+    @register('task1')
+    async def task1(inputs=None, config=None):
+        logger.info('unknown ID ==> {}'.format(inputs))
+        logger.info('==> hello world #1')
+        logger.info('==> hello world #2')
+        await asyncio.sleep(1)
+        logger.info('==> hello world #3')
+        await asyncio.sleep(1)
+        logger.info('==> hello world #4')
+        return 'Oops I dit it again!'
 
-        def on_event(self, inputs=None):
-            self._event.set()
-            logger.info('{} ==> Unlocked event'.format(self.uid))
-            logger.info('{} ==> Received inputs: {}'.format(self.uid, inputs))
-
-        def configure(self, dummy=None, other=None):
-            if dummy is None and other is None:
-                self.myconfig = 'everything is None in config'
-            else:
-                self.myconfig = 'got config: {} and {}'.format(dummy, other)
-
-        async def on_cancel(self, inputs=None):
-            logger.info("called 'on_cancel' handler")
-
-    class Task2(Task):
-        async def execute(self, inputs=None):
-            if isinstance(inputs, Task):
-                logger.info("Input data is task UID={}".format(inputs.uid))
-            for _ in range(3):
-                logger.info("{} ==> fire is coming...".format(self.uid))
-                await asyncio.sleep(1)
-            # await self.fire('hello world')
-
-    brokr = Broker(loop=ioloop)
 
     # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
     cfg = {'dummy': 'world'}
-    t1 = Task1(config=cfg, loop=ioloop)
+    t1 = run_task('task1', loop=ioloop)
 
     # Must raise InvalidStateError
     try:
@@ -267,7 +162,6 @@ if __name__ == '__main__':
         print("raised {}".format(str(exc)))
 
     # Schedule the execution of the task and run it.
-    t1.run()
     ioloop.run_until_complete(asyncio.wait([t1]))
     print("Task is done?: {}".format(t1.done()))
     print("Task's result is: {}".format(t1.result()))
