@@ -10,7 +10,7 @@ except FileNotFoundError:
 
 setup(
     name='tukio',
-    description='An event-based workflow generator library built around asyncio',
+    description='An event-based workflow library built around asyncio',
     url='https://github.com/optiflows/tukio',
     author='Optiflows R&D',
     author_email='rand@surycat.com',

@@ -131,8 +131,6 @@ class TaskDescription(object):
 
 if __name__ == '__main__':
     import sys
-    from broker import Broker
-    from threading import Event
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
@@ -140,20 +138,21 @@ if __name__ == '__main__':
 
     @register('task1')
     async def task1(inputs=None, config=None):
-        logger.info('unknown ID ==> {}'.format(inputs))
-        logger.info('==> hello world #1')
-        logger.info('==> hello world #2')
+        task = asyncio.Task.current_task()
+        logger.info('{} ==> {}'.format(task.uid, inputs))
+        logger.info('{} ==> hello world #1'.format(task.uid))
+        logger.info('{} ==> hello world #2'.format(task.uid))
         await asyncio.sleep(1)
-        logger.info('==> hello world #3')
+        logger.info('{} ==> hello world #3'.format(task.uid))
         await asyncio.sleep(1)
-        logger.info('==> hello world #4')
+        logger.info('{} ==> hello world #4'.format(task.uid))
         return 'Oops I dit it again!'
-
 
     # TEST1: configure 1 task and run it twice
     print("+++++++ TEST1")
     cfg = {'dummy': 'world'}
     t1 = run_task('task1', loop=ioloop)
+    print("Task input data: {}".format(t1.inputs))
 
     # Must raise InvalidStateError
     try:
@@ -162,7 +161,7 @@ if __name__ == '__main__':
         print("raised {}".format(str(exc)))
 
     # Schedule the execution of the task and run it.
-    ioloop.run_until_complete(asyncio.wait([t1]))
+    ioloop.run_until_complete(t1)
     print("Task is done?: {}".format(t1.done()))
     print("Task's result is: {}".format(t1.result()))
 

@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import sys
-from uuid import uuid4
 import weakref
+import functools
+from uuid import uuid4
 
 from tukio.dag import DAG
 from tukio.task import TaskDescription
@@ -26,7 +27,7 @@ class WorkflowDescription(object):
     description objects (`TaskDescription`). This class is not a workflow
     execution engine.
     It provides an API to easily build and update a consistent workflow as well
-    as created runnable workflow instances.
+    as create runnable workflow instances.
     """
 
     def __init__(self, uid=None):
@@ -146,40 +147,113 @@ class WorkflowDescription(object):
         return wf_dict
 
 
-"""
-wfd.add()
-wfd.delete()
-wfd.get()
-wfd.link()
-wfd.unlink()
-wfd.root()
-wfd.validate()
-wfd.from_dict()
-wfd.as_dict()
-"""
+class Workflow(asyncio.Future):
+
+    """
+    This class handles the execution of a workflow.
+    """
+
+    def __init__(self, wf_desc, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._wf_desc = wf_desc
+        self._wf_exec = dict()
+
+    def _add_task(self, task, parent=None):
+        """
+        Adds a task to the exec dictionary and maintains the mapping dict
+        between the task IDs and task objects.
+        """
+        try:
+            _tasks = self._wf_exec[parent].add(task)
+        except KeyError:
+            pass
+        self._wf_exec[task] = set()
+
+    def run(self, *args, **kwargs):
+        """
+        Execute the workflow following the description passed at init.
+        """
+        # Run the root task
+        root_desc = self._wf_desc.root()
+        root_task = root_desc.run_task(*args, loop=self._loop, **kwargs)
+        done_cb = functools.partial(self._run_next_tasks, root_desc)
+        root_task.add_done_callback(done_cb)
+        self._add_task(root_task)
+
+    def _run_next_tasks(self, task_desc, future):
+        """
+        A callback to be added to each task in order to select and schedule
+        asynchronously downstream tasks once the parent task is done.
+        """
+        # Don't keep executing the workflow if a task was cancelled.
+        try:
+            result = future.result()
+        except asyncio.CancelledError as exc:
+            return
+        succ_descs = self._wf_desc.dag.successors(task_desc)
+        for succ_desc in succ_descs:
+            succ_task = succ_desc.run_task(result, loop=self._loop)
+            done_cb = functools.partial(self._run_next_tasks, succ_desc)
+            succ_task.add_done_callback(done_cb)
+            self._add_task(succ_task, parent=future)
+        # If nothing left to execute, the workflow is done
+        for task in self._wf_exec.keys():
+            if not task.done():
+                break
+        else:
+            # The result of the future may have been set by another task
+            # executed in the same iteration of the loop.
+            if not self.done():
+                self.set_result('done')
+
+    def cancel(self):
+        """
+        Cancel the workflow by cancelling all pending tasks.
+        Note: a 'pending' task from asyncio's point of view means that the
+        coroutine has been scheduled and is not done. Aka from the workflow
+        point of view, it means the task has been started and is not done.
+        """
+        for task in self._wf_exec.keys():
+            if not task.done():
+                task.cancel()
+        super().cancel()
+
 
 if __name__ == '__main__':
+    from tukio import task
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
-    loop = asyncio.get_event_loop()
+    ioloop = asyncio.get_event_loop()
+
+    @task.register('task1')
+    async def task1(inputs=None, config=None):
+        task = asyncio.Task.current_task()
+        logger.info('{} ==> received {}'.format(task.uid, inputs))
+        logger.info('{} ==> hello world #1'.format(task.uid))
+        logger.info('{} ==> hello world #2'.format(task.uid))
+        await asyncio.sleep(1)
+        logger.info('{} ==> hello world #3'.format(task.uid))
+        await asyncio.sleep(1)
+        logger.info('{} ==> hello world #4'.format(task.uid))
+        return 'Oops I dit it again! from {}'.format(task.uid)
 
     wf_dict = {
         "uid": "my-workflow",
         "tasks": [
-            {"uid": "f1", "name": "fake"},
-            {"uid": "f2", "name": "fake"},
-            {"uid": "f3", "name": "fake"},
-            {"uid": "f4", "name": "fake"},
-            {"uid": "f5", "name": "fake"},
-            {"uid": "f6", "name": "fake"}
+            {"uid": "f1", "name": "task1"},
+            {"uid": "f2", "name": "task1"},
+            {"uid": "f3", "name": "task1"},
+            {"uid": "f4", "name": "task1"},
+            {"uid": "f5", "name": "task1"},
+            {"uid": "f6", "name": "task1"}
         ],
         "graph": {
             "f1": ["f2"],
             "f2": ["f3", "f4"],
             "f3": ["f5"],
-            "f4": ["f5"],
-            "f5": ["f6"],
+            "f4": ["f6"],
+            "f5": [],
             "f6": []
         }
     }
@@ -187,3 +261,11 @@ if __name__ == '__main__':
     print("workflow uid: {}".format(wf_desc.uid))
     print("workflow graph: {}".format(wf_desc.dag.graph))
     print("workflow tasks: {}".format(wf_desc.tasks))
+    print("workflow root task: {}".format(wf_desc.root()))
+    print("workflow successors of root task: {}".format(wf_desc.dag.successors(wf_desc.root())))
+
+    # Run the workflow
+    wf_exec = Workflow(wf_desc, loop=ioloop)
+    wf_exec.run('dada')
+    ioloop.run_until_complete(wf_exec)
+    print("workflow is done? {}".format(wf_exec.done()))
