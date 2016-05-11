@@ -4,8 +4,7 @@ A few core concepts define what is a task from a tukio's workflow point of view.
 Many of those concepts were inspired from `asyncio.Future`:
 * An instance of task has a unique ID (`uid`)
 * Tasks can be interrupted on cancel or timeout
-* Tasks give the opportunity to code cleanup actions on timeout and cancel
-* No cleanup actions of _cleanup actions_ (after a cancel or timeout)
+* Tasks give the opportunity to code _cleanup actions_ on timeout and cancel
 * Cleanup actions may affect the result of a task
 * A force-cancel method prevent _cancel cleanup actions_ from being executed
 * A task has a few states: `pending`, `running` and `done`
@@ -30,7 +29,8 @@ above in mind:
 1. A task is a class that inherits from `asyncio.Future`
 
 A simple coroutine is not really convenient to implement cleanup actions and
-handle stateful information; even wrapped in a `Future` (possible though).
+handle stateful or exec context information; even wrapped in a `Future`
+(possible though).
 Hence it does not seem to be the right direction. Inheriting from a base class
 is definitely the right way to work with tasks.
 
@@ -81,3 +81,12 @@ class Task(asyncio.Task):
         """Callback executed on cancellation. Give the opportunity to cleanup
         the execution context and update the result of the task."""
 ```
+
+## Outcome
+
+After two experiments from @thavel and @lhavel, we found that, at last, we
+should investigate the "_task as a coroutine_" implementation direction.
+This is the simplest way to go.
+We should move to a class-based implementation (inherited from `asyncio.Task`
+or not) as soon as our tasks require class-level features (such as sharing a
+global context and/or data between methods).
