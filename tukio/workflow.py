@@ -173,6 +173,9 @@ class Workflow(asyncio.Future):
         """
         Execute the workflow following the description passed at init.
         """
+        # A workflow can be ran only once
+        if self._wf_exec:
+            return
         # Run the root task
         root_desc = self._wf_desc.root()
         root_task = root_desc.run_task(*args, loop=self._loop, **kwargs)
@@ -238,6 +241,10 @@ if __name__ == '__main__':
         logger.info('{} ==> hello world #4'.format(task.uid))
         return 'Oops I dit it again! from {}'.format(task.uid)
 
+    async def cancellator(future):
+        await asyncio.sleep(4)
+        future.cancel()
+
     wf_dict = {
         "uid": "my-workflow",
         "tasks": [
@@ -262,10 +269,25 @@ if __name__ == '__main__':
     print("workflow graph: {}".format(wf_desc.dag.graph))
     print("workflow tasks: {}".format(wf_desc.tasks))
     print("workflow root task: {}".format(wf_desc.root()))
-    print("workflow successors of root task: {}".format(wf_desc.dag.successors(wf_desc.root())))
 
     # Run the workflow
     wf_exec = Workflow(wf_desc, loop=ioloop)
-    wf_exec.run('dada')
-    ioloop.run_until_complete(wf_exec)
+    wf_exec.run('simple')
+    res = ioloop.run_until_complete(wf_exec)
+    print("workflow returned {}".format(res))
+    print("workflow is done? {}".format(wf_exec.done()))
+
+    # Run again the same workflow
+    wf_exec.run('again')
+    res = ioloop.run_until_complete(wf_exec)
+    print("workflow returned: {}".format(res))
+    print("workflow is done? {}".format(wf_exec.done()))
+
+    # Run and cancel the workflow
+    wf_exec = Workflow(wf_desc, loop=ioloop)
+    cancel_task = asyncio.ensure_future(cancellator(wf_exec))
+    wf_exec.run('cancel')
+    futs = [wf_exec, cancel_task]
+    res = ioloop.run_until_complete(asyncio.wait(futs))
+    print("workflow returned {}".format(res))
     print("workflow is done? {}".format(wf_exec.done()))
