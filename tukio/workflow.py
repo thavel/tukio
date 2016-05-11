@@ -3,8 +3,8 @@ import logging
 import sys
 import weakref
 import functools
-from uuid import uuid4
 
+from tukio.utils import get_uid
 from tukio.dag import DAG
 from tukio.task import TaskDescription
 
@@ -32,7 +32,7 @@ class WorkflowDescription(object):
 
     def __init__(self, uid=None):
         # Unique execution ID of the workflow
-        self._uid = uid or "-".join(['wf', str(uuid4())[:8]])
+        self._uid = uid or get_uid('wf')
         self._dag = DAG()
         self._tasks = weakref.WeakValueDictionary()
 

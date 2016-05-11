@@ -8,7 +8,8 @@ coroutines and schedule their execution in an event loop.
 import asyncio
 import logging
 import functools
-from uuid import uuid4
+
+from tukio.utils import get_uid
 
 
 logger = logging.getLogger(__name__)
@@ -48,9 +49,9 @@ def register(task_name):
     return decorator
 
 
-def get_coro_fn(task_name):
+def get_coro_func(task_name):
     """
-    Returns the function or method registered as `task_name`.
+    Returns the coroutine function or method registered as `task_name`.
     """
     return _TaskRegistry._registry[task_name]
 
@@ -62,23 +63,16 @@ def all_task_names():
     return list(_TaskRegistry._registry.keys())
 
 
-def _make_task_uid(task_name):
-    """
-    Returns a unique ID to tag an `asyncio.Task` instance with.
-    """
-    return "-".join([str(task_name), str(uuid4())[:8]])
-
-
 def run_task(task_name, *args, loop=None, **kwargs):
     """
     Schedules the execution of the coroutine registered as `task_name` and
     returns the resulting `asyncio.Task` instance.
     """
-    coro_fn = get_coro_fn(task_name)
+    coro_fn = get_coro_func(task_name)
     coro = coro_fn(*args, **kwargs)
     task = asyncio.ensure_future(coro, loop=loop)
     # Add useful attributes to the instance of `asyncio.Task`.
-    task.uid = _make_task_uid(task_name)
+    task.uid = get_uid(task_name)
     task.inputs = (args, kwargs)
     return task
 
@@ -96,9 +90,9 @@ class TaskDescription(object):
     config = None
 
     def __init__(self, name, config=None, uid=None):
-        self._uid = uid or "-".join(['task-desc', str(uuid4())[:8]])
         self.name = name
         self.config = config or dict()
+        self._uid = uid or get_uid('task-desk')
 
     @property
     def uid(self):

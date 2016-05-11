@@ -9,8 +9,6 @@ Many of those concepts were inspired from `asyncio.Future`:
 * A force-cancel method prevent _cancel cleanup actions_ from being executed
 * A task has a few states: `pending`, `running` and `done`
 * Sub-states of `done` are: `completed`, `timeout` and `cancelled`
-* Tasks instances are created upon starting a new workflow exec instance
-* Tasks don't start upon instantiation (dedicated method for that)
 * One can get the result returned by a task at any time
 * One can get the state of a task at any time
 
