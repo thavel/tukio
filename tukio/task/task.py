@@ -4,7 +4,7 @@ That module assumes that a Tukio task runs as an `asyncio.Task()` instance.
 It provides a registry `TaskRegistry` to register classes that define
 coroutines as well as standard standalone coroutines as Tukio tasks.
 
-It also provides a function `run_task()` that shall be used to schedule the
+It also provides a function `new_task()` that shall be used to schedule the
 execution of Tukio tasks in an asyncio event loop.
 """
 import asyncio
@@ -72,7 +72,7 @@ def register(task_name, coro_name=None):
     return decorator
 
 
-def run_task(task_name, inputs=((), {}), config=None, loop=None):
+def new_task(task_name, inputs=((), {}), config=None, loop=None):
     """
     Schedules the execution of the coroutine registered as `task_name` (either
     defined in a task holder class or not) in the loop and returns an instance
@@ -89,7 +89,10 @@ def run_task(task_name, inputs=((), {}), config=None, loop=None):
     task = asyncio.ensure_future(coro, loop=loop)
     # Give the opportunity to link the asyncio task object to the task holder
     if task_holder:
-        task_holder.task_created(task)
+        try:
+            task_holder.task_created(task)
+        except Exception as exc:
+            task.set_exception(exc)
     return task
 
 
@@ -135,12 +138,12 @@ if __name__ == '__main__':
     cfg = {'dummy': 'world'}
 
     # run from a standalone coroutine
-    t1 = run_task('coro-task', inputs=(('hello',), {}), loop=ioloop)
+    t1 = new_task('coro-task', inputs=(('hello',), {}), loop=ioloop)
     print('Task is {}'.format(t1))
     print("Task exec id: {}".format(t1.uid))
 
     # run from a task holder
-    t2 = run_task('holder-task', config=cfg, loop=ioloop)
+    t2 = new_task('holder-task', config=cfg, loop=ioloop)
 
     # Must raise InvalidStateError
     try:
@@ -158,8 +161,8 @@ if __name__ == '__main__':
 
     # TEST2: run 2 tasks running in parallel, one cancels the other
     print("+++++++ TEST2")
-    t1 = run_task('coro-task', config=cfg, loop=ioloop)
-    t2 = run_task('holder-task', inputs=((t1,), {}), loop=ioloop)
+    t1 = new_task('coro-task', config=cfg, loop=ioloop)
+    t2 = new_task('holder-task', inputs=((t1,), {}), loop=ioloop)
     tasks = [t1, t2]
     ioloop.run_until_complete(asyncio.wait(tasks))
     print("Task {} is done?: {}".format(t1.uid, t1.done()))

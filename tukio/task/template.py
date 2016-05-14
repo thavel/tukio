@@ -1,4 +1,5 @@
 from uuid import uuid4
+from .task import new_task
 
 
 class TaskTemplate:
@@ -11,11 +12,15 @@ class TaskTemplate:
     def __init__(self, name, config=None, uid=None):
         self.name = name
         self.config = config or dict()
-        self._uid = uid or str(uuid4())
+        self.uid = uid or str(uuid4())
 
-    @property
-    def uid(self):
-        return self._uid
+    def new_task(self, *args, loop=None, **kwargs):
+        """
+        Create a new task from the current task template.
+        """
+        inputs = (args, kwargs)
+        return new_task(self.name, inputs=inputs,
+                        config=self.config, loop=loop)
 
     @classmethod
     def from_dict(cls, task_dict):

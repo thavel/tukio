@@ -3,10 +3,10 @@ import logging
 import sys
 import weakref
 import functools
+from uuid import uuid4
 
-from tukio.utils import get_uid
 from tukio.dag import DAG
-from tukio.task import TaskDescription
+from tukio.task import TaskTemplate
 
 
 logger = logging.getLogger(__name__)
@@ -20,25 +20,20 @@ class WorkflowRootTaskError(WorkflowError):
     pass
 
 
-class WorkflowDescription(object):
+class WorkflowTemplate(object):
 
     """
-    A workflow description is a DAG (Directed Acyclic Graph) made up of task
-    description objects (`TaskDescription`). This class is not a workflow
-    execution engine.
-    It provides an API to easily build and update a consistent workflow as well
-    as create runnable workflow instances.
+    A workflow template is a DAG (Directed Acyclic Graph) made up of task
+    template objects (`TaskTemplate`). This class is not a workflow execution
+    engine.
+    It provides an API to easily build and update a consistent workflow.
     """
 
     def __init__(self, uid=None):
         # Unique execution ID of the workflow
-        self._uid = uid or get_uid('wf')
+        self.uid = uid or str(uuid4())
         self._dag = DAG()
         self._tasks = weakref.WeakValueDictionary()
-
-    @property
-    def uid(self):
-        return self._uid
 
     @property
     def dag(self):
@@ -48,23 +43,23 @@ class WorkflowDescription(object):
     def tasks(self):
         return dict(self._tasks)
 
-    def add(self, task_desc):
+    def add(self, task_tmpl):
         """
-        Adds a new task description to the workflow. The task will remain
-        orphan until it is linked to upstream/downstream tasks.
-        This method must be passed a `TaskDescription()` instance.
+        Adds a new task template to the workflow. The task will remain orphan
+        until it is linked to upstream/downstream tasks.
+        This method must be passed a `TaskTemplate()` instance.
         """
-        if not isinstance(task_desc, TaskDescription):
-            raise TypeError("expected a 'TaskDescription' instance")
-        self.dag.add_node(task_desc)
-        self._tasks[task_desc.uid] = task_desc
+        if not isinstance(task_tmpl, TaskTemplate):
+            raise TypeError("expected a 'TaskTemplate' instance")
+        self.dag.add_node(task_tmpl)
+        self._tasks[task_tmpl.uid] = task_tmpl
 
-    def delete(self, task_desc):
+    def delete(self, task_tmpl):
         """
-        Remove a task description from the workflow and delete the links to
+        Remove a task template from the workflow and delete the links to
         upstream/downstream tasks.
         """
-        self.dag.delete_node(task_desc)
+        self.dag.delete_node(task_tmpl)
 
     def get(self, task_id):
         """
@@ -85,20 +80,20 @@ class WorkflowDescription(object):
             raise WorkflowRootTaskError("expected one root task, "
                                         "found {}".format(root_task))
 
-    def link(self, up_task_desc, down_task_desc):
+    def link(self, up_task_tmpl, down_task_tmpl):
         """
         Create a directed link from an upstream to a downstream task.
         """
-        self.dag.add_edge(up_task_desc, down_task_desc)
+        self.dag.add_edge(up_task_tmpl, down_task_tmpl)
 
-    def unlink(self, task_desc1, task_desc2):
+    def unlink(self, task_tmpl1, task_tmpl2):
         """
         Remove the link between two tasks.
         """
         try:
-            self.dag.delete_edge(task_desc1, task_desc2)
+            self.dag.delete_edge(task_tmpl1, task_tmpl2)
         except KeyError:
-            self.dag.delete_edge(task_desc2, task_desc1)
+            self.dag.delete_edge(task_tmpl2, task_tmpl1)
 
     @classmethod
     def from_dict(cls, wf_dict):
@@ -119,16 +114,16 @@ class WorkflowDescription(object):
             }
         """
         uid = wf_dict['uid']
-        wf_desc = cls(uid)
+        wf_tmpl = cls(uid)
         for task_dict in wf_dict['tasks']:
-            task_desc = TaskDescription.from_dict(task_dict)
-            wf_desc.add(task_desc)
+            task_tmpl = TaskTemplate.from_dict(task_dict)
+            wf_tmpl.add(task_tmpl)
         for up_id, down_ids_set in wf_dict['graph'].items():
-            up_desc = wf_desc.get(up_id)
+            up_desc = wf_tmpl.get(up_id)
             for down_id in down_ids_set:
-                down_desc = wf_desc.get(down_id)
-                wf_desc.link(up_desc, down_desc)
-        return wf_desc
+                down_desc = wf_tmpl.get(down_id)
+                wf_tmpl.link(up_desc, down_desc)
+        return wf_tmpl
 
     def as_dict(self):
         """
@@ -136,10 +131,10 @@ class WorkflowDescription(object):
         object.
         """
         wf_dict = {"uid": self.uid, "tasks": [], "graph": {}}
-        for task_id, task_desc in self.tasks.items():
-            task_dict = {"uid": task_id, "name": task_desc.name}
-            if task_desc.config:
-                task_dict['config'] = task_desc.config
+        for task_id, task_tmpl in self.tasks.items():
+            task_dict = {"uid": task_id, "name": task_tmpl.name}
+            if task_tmpl.config:
+                task_dict['config'] = task_tmpl.config
             wf_dict['tasks'].append(task_dict)
         for up_desc, down_descs_set in self.dag.graph.items():
             _record = {up_desc.uid: list(map(lambda x: x.uid, down_descs_set))}
@@ -150,24 +145,32 @@ class WorkflowDescription(object):
 class Workflow(asyncio.Future):
 
     """
-    This class handles the execution of a workflow.
+    This class handles the execution of a workflow. Tasks are created along the
+    way of workflow execution.
     """
 
-    def __init__(self, wf_desc, *args, **kwargs):
+    def __init__(self, wf_tmpl, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._wf_desc = wf_desc
+        self._wf_tmpl = wf_tmpl
         self._wf_exec = dict()
+        self._task_exception = None
+        self._must_cancel = False
+
+    @property
+    def tasks(self):
+        """
+        Returns the list of all tasks pending or done.
+        """
+        return list(self._wf_exec.keys())
 
     def _add_task(self, task, parent=None):
         """
-        Adds a task to the exec dictionary and maintains the mapping dict
-        between the task IDs and task objects.
+        Adds a task to the exec graph and optionally adds an edge from the
+        parent task to this task.
         """
-        try:
-            _tasks = self._wf_exec[parent].add(task)
-        except KeyError:
-            pass
         self._wf_exec[task] = set()
+        if parent:
+            self._wf_exec[parent].add(task)
 
     def run(self, *args, **kwargs):
         """
@@ -177,72 +180,130 @@ class Workflow(asyncio.Future):
         if self._wf_exec:
             return
         # Run the root task
-        root_desc = self._wf_desc.root()
-        root_task = root_desc.run_task(*args, loop=self._loop, **kwargs)
-        done_cb = functools.partial(self._run_next_tasks, root_desc)
-        root_task.add_done_callback(done_cb)
-        self._add_task(root_task)
+        root_tmpl = self._wf_tmpl.root()
+        self._new_task(root_tmpl, (args, kwargs))
 
-    def _run_next_tasks(self, task_desc, future):
+    def _new_task(self, task_tmpl, inputs, parent=None):
+        """
+        Each new task must be created successfully, else the whole workflow
+        shall stop running.
+        """
+        try:
+            args, kwargs = inputs
+            task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
+        except Exception as exc:
+            cancelled = self._cancel_all_tasks()
+            # if there are pending tasks being cancelled, we must wait for
+            # those tasks to be done and delay the call to `set_exception()`
+            if cancelled > 0:
+                self._task_exception = exc
+                return None
+            else:
+                self.set_exception(exc)
+                raise
+        else:
+            done_cb = functools.partial(self._run_next_tasks, task_tmpl)
+            task.add_done_callback(done_cb)
+            self._add_task(task, parent=parent)
+
+    def _run_next_tasks(self, task_tmpl, future):
         """
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
         """
-        # Don't keep executing the workflow if a task was cancelled.
+        if self._must_cancel:
+            self._try_mark_done()
+            return
+        # Don't execute downstream tasks if the task's result is an exception
+        # (may include task cancellation) but don't stop the other branches
+        # of the workflow.
         try:
             result = future.result()
-        except asyncio.CancelledError as exc:
-            return
-        succ_descs = self._wf_desc.dag.successors(task_desc)
-        for succ_desc in succ_descs:
-            succ_task = succ_desc.run_task(result, loop=self._loop)
-            done_cb = functools.partial(self._run_next_tasks, succ_desc)
-            succ_task.add_done_callback(done_cb)
-            self._add_task(succ_task, parent=future)
-        # If nothing left to execute, the workflow is done
-        for task in self._wf_exec.keys():
-            if not task.done():
-                break
+        except Exception as exc:
+            pass
         else:
-            # The result of the future may have been set by another task
-            # executed in the same iteration of the loop.
-            if not self.done():
-                self.set_result('done')
+            succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
+            for succ_tmpl in succ_tmpls:
+                inputs = ((result,), {})
+                succ_task = self._new_task(succ_tmpl, inputs, parent=future)
+                if not succ_task:
+                    break
+        finally:
+            self._try_mark_done()
+
+    def _try_mark_done(self):
+        """
+        If nothing left to execute, the workflow must be marked as done. The
+        result is set to either the exec graph (represented by a dict) or to an
+        exception raised at task creation.
+        """
+        # Note: the result of the workflow may already have been set by another
+        # done callback from another task executed in the same iteration of the
+        # event loop.
+        if self._all_tasks_done() and not self.done():
+            if self._task_exception:
+                self.set_exception(self._task_exception)
+            elif self._must_cancel:
+                super().cancel()
+            else:
+                self.set_result(self._wf_exec)
+
+    def _all_tasks_done(self):
+        """
+        Returns True if all tasks are done, else returns False.
+        """
+        for task in self.tasks:
+            if not task.done():
+                return False
+        return True
+
+    def _cancel_all_tasks(self):
+        """
+        Cancels all pending tasks and returns the number of tasks cancelled.
+        """
+        self._must_cancel = True
+        cancelled = 0
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+                cancelled += 1
+        return cancelled
 
     def cancel(self):
         """
-        Cancel the workflow by cancelling all pending tasks.
-        Note: a 'pending' task from asyncio's point of view means that the
-        coroutine has been scheduled and is not done. Aka from the workflow
-        point of view, it means the task has been started and is not done.
+        Cancel the workflow by cancelling all pending tasks (aka all tasks not
+        marked as done). We must wait for all tasks to be actually done before
+        marking the workflow as cancelled (hence done).
         """
-        for task in self._wf_exec.keys():
-            if not task.done():
-                task.cancel()
-        super().cancel()
+        cancelled = self._cancel_all_tasks()
+        if cancelled == 0:
+            super().cancel()
+        return True
 
 
 if __name__ == '__main__':
-    from tukio import task
+    from tukio.task import *
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
     ioloop = asyncio.get_event_loop()
+    ioloop.set_task_factory(tukio_factory)
 
-    @task.register('task1')
-    async def task1(inputs=None, config=None):
+    @register('task1')
+    async def task1(inputs=None):
         task = asyncio.Task.current_task()
+        logger.info('running task: {}'.format(task))
         logger.info('{} ==> received {}'.format(task.uid, inputs))
         logger.info('{} ==> hello world #1'.format(task.uid))
         logger.info('{} ==> hello world #2'.format(task.uid))
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         logger.info('{} ==> hello world #3'.format(task.uid))
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         logger.info('{} ==> hello world #4'.format(task.uid))
         return 'Oops I dit it again! from {}'.format(task.uid)
 
     async def cancellator(future):
-        await asyncio.sleep(4)
+        await asyncio.sleep(2)
         future.cancel()
 
     wf_dict = {
@@ -264,17 +325,17 @@ if __name__ == '__main__':
             "f6": []
         }
     }
-    wf_desc = WorkflowDescription.from_dict(wf_dict)
-    print("workflow uid: {}".format(wf_desc.uid))
-    print("workflow graph: {}".format(wf_desc.dag.graph))
-    print("workflow tasks: {}".format(wf_desc.tasks))
-    print("workflow root task: {}".format(wf_desc.root()))
+    wf_tmpl = WorkflowTemplate.from_dict(wf_dict)
+    print("workflow uid: {}".format(wf_tmpl.uid))
+    # print("workflow graph: {}".format(wf_tmpl.dag.graph))
+    # print("workflow tasks: {}".format(wf_tmpl.tasks))
+    print("workflow root task: {}".format(wf_tmpl.root()))
 
     # Run the workflow
-    wf_exec = Workflow(wf_desc, loop=ioloop)
+    wf_exec = Workflow(wf_tmpl, loop=ioloop)
     wf_exec.run('simple')
     res = ioloop.run_until_complete(wf_exec)
-    print("workflow returned {}".format(res))
+    print("workflow returned: {}".format(res))
     print("workflow is done? {}".format(wf_exec.done()))
 
     # Run again the same workflow
@@ -284,10 +345,11 @@ if __name__ == '__main__':
     print("workflow is done? {}".format(wf_exec.done()))
 
     # Run and cancel the workflow
-    wf_exec = Workflow(wf_desc, loop=ioloop)
+    wf_exec = Workflow(wf_tmpl, loop=ioloop)
     cancel_task = asyncio.ensure_future(cancellator(wf_exec))
     wf_exec.run('cancel')
     futs = [wf_exec, cancel_task]
     res = ioloop.run_until_complete(asyncio.wait(futs))
-    print("workflow returned {}".format(res))
+    print("workflow returned: {}".format(res))
     print("workflow is done? {}".format(wf_exec.done()))
+    print("workflow is cancelled? {}".format(wf_exec.cancelled()))
