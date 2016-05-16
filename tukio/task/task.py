@@ -86,14 +86,7 @@ def new_task(task_name, inputs=((), {}), config=None, loop=None):
     else:
         task_holder = None
         coro = coro_fn(*args, **kwargs)
-    task = asyncio.ensure_future(coro, loop=loop)
-    # Give the opportunity to link the asyncio task object to the task holder
-    if task_holder:
-        try:
-            task_holder.task_created(task)
-        except Exception as exc:
-            task.set_exception(exc)
-    return task
+    return asyncio.ensure_future(coro, loop=loop)
 
 
 if __name__ == '__main__':

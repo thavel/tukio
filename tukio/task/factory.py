@@ -12,8 +12,11 @@ class TukioTask(asyncio.Task):
     """
     def __init__(self, coro, *, loop=None):
         super().__init__(coro, loop=loop)
-        self.uid = str(uuid4())
         self.holder = inspect.getcoroutinelocals(coro).get('self')
+        try:
+            self.uid = self.holder.uid
+        except AttributeError:
+            self.uid = str(uuid4())
 
 
 def tukio_factory(loop, coro):
