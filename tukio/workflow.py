@@ -4,6 +4,7 @@ import sys
 import functools
 from uuid import uuid4
 from datetime import datetime
+from enum import Enum
 
 from tukio.dag import DAG
 from tukio.task import TaskTemplate
@@ -21,6 +22,107 @@ class WorkflowRootTaskError(WorkflowError):
     pass
 
 
+class OverrunPolicy(Enum):
+
+    """
+    The overrun policy defines what to do if the previous execution of a
+    workflow didn't finish yet and a new event must be dispatched by the
+    workflow engine.
+    This class also defines policy handlers that can create new instances
+    of workflow execution objects according to the current overrun policy and
+    to the list of running workflow instances (with the same template).
+    """
+
+    # Skip until all running instances are finished
+    skip = 'skip'
+    # Start a new workflow instance whatever the running instances
+    start_new = 'start-new'
+    # Skip until all running instances had been unlocked
+    skip_until_unlock = 'skip-until-unlock'
+    # Abort all running instances before creating a new once
+    abort_running = 'abort-running'
+
+    @classmethod
+    def get_default_policy(cls):
+        """
+        Returns the default overrun policy.
+        """
+        return OverrunPolicy.skip_until_unlock
+
+
+class OverrunPolicyHandler:
+
+    """
+    This class defines overrun policy handlers to create new instances
+    of workflow execution objects according to the current overrun policy and
+    to the list of running workflow instances (with the same template).
+    """
+
+    def __init__(self, template, loop=None):
+        self._loop = loop
+        # Store the workflow template for further use in policy handlers.
+        self.template = template
+        self.policy = template.policy
+
+    def new_workflow(self, running=None):
+        method = getattr('_' + self.policy.name)
+        return method(running)
+
+    def _check_wflow(self, wflow):
+        if wflow.template_id != self.template.uid:
+            err = 'expected template ID {}'', got {}'
+            raise ValueError(err.format(self.template.uid, wflow.template_id))
+
+    def _new_wflow(self):
+        return Workflow(self.template, loop=self._loop)
+
+    def _skip(self, running):
+        """
+        Run a new instance of workflow only if there's no instance already
+        running with the same template ID.
+        """
+        if running:
+            for wflow in running:
+                self._check_wflow(wflow)
+            return None
+        else:
+            return self._new_wflow()
+
+    def _start_new(self, _):
+        """
+        Always run a new instance of workflow.
+        """
+        return self._new_wflow()
+
+    def _skip_until_unlock(self, running):
+        """
+        Run a new instance of workflow only if all the instances already
+        running have been unlocked. Refer to the `Workflow` docstring for more
+        details about locked/unlocked workflows.
+        """
+        if running:
+            for wflow in running:
+                self._check_wflow(wflow)
+                if wflow.is_locked():
+                    break
+            else:
+                return self._new_wflow()
+            # There's at least 1 locked workflow instance
+            return None
+        else:
+            return self._new_wflow()
+
+    def _abort_running(self, running):
+        """
+        Abort all running instances of the workflow before creating a new one.
+        """
+        if running:
+            for wflow in running:
+                self._check_wflow(wflow)
+                wflow.cancel()
+        return self._new_wflow()
+
+
 class WorkflowTemplate(object):
 
     """
@@ -30,11 +132,18 @@ class WorkflowTemplate(object):
     It provides an API to easily build and update a consistent workflow.
     """
 
-    def __init__(self, title, uid=None, tags=None, version=None):
+    def __init__(self, title, uid=None, tags=None, version=None, policy=None):
         self.title = title
         self.tags = tags or []
         self.uid = uid or str(uuid4())
         self.version = int(version) if version is not None else 1
+        if policy is None:
+            self.policy = OverrunPolicy.get_default_policy()
+        elif isinstance(policy, OverrunPolicy):
+            self.policy = policy
+        else:
+            self.policy = OverrunPolicy(policy)
+
         self.dag = DAG()
 
     @property
@@ -93,6 +202,8 @@ class WorkflowTemplate(object):
             {
                 "title": <workflow-title>,
                 "id": <workflow-uid>,
+                "vesion": <version>,
+                "tags": [<a-tag>, <another-tag>],
                 "tasks": [
                     {"id": <task-uid>, "name": <name>, "config": <cfg-dict>},
                     ...
@@ -107,7 +218,9 @@ class WorkflowTemplate(object):
         # 'title' is the only mandatory key
         title, uid = wf_dict['title'], wf_dict.get('id')
         tags, version = wf_dict.get('tags'), wf_dict.get('version')
-        wf_tmpl = cls(title, uid=uid, tags=tags, version=version)
+        policy = wf_dict.get('policy')
+        wf_tmpl = cls(title, uid=uid, tags=tags,
+                      version=version, policy=policy)
         task_ids = dict()
         for task_dict in wf_dict['tasks']:
             task_tmpl = TaskTemplate.from_dict(task_dict)
@@ -166,6 +279,10 @@ class Workflow(asyncio.Future):
         self._new_task_exc = None
         self._must_cancel = False
 
+    @property
+    def template_id(self):
+        return self._wf_tmpl.uid
+
     def run(self, *args, **kwargs):
         """
         Execute the workflow following the description passed at init.
@@ -181,7 +298,7 @@ class Workflow(asyncio.Future):
         if not task:
             self._try_mark_done()
 
-    def _new_task(self, task_tmpl, inputs, parent=None):
+    def _new_task(self, task_tmpl, inputs):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
@@ -221,7 +338,7 @@ class Workflow(asyncio.Future):
             succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
                 inputs = ((result,), {})
-                succ_task = self._new_task(succ_tmpl, inputs, parent=future)
+                succ_task = self._new_task(succ_tmpl, inputs)
                 if not succ_task:
                     break
         finally:
@@ -289,6 +406,16 @@ class Workflow(asyncio.Future):
         return report
 
 
+def new_workflow(wf_tmpl, running=None, loop=None):
+    """
+    Returns a new workflow execution object if a new instance can be run.
+    It depends on the template's overrun policy and the list of running
+    workflow instances (given by `running`).
+    """
+    policy_handler = OverrunPolicyHandler(wf_tmpl, loop=loop)
+    return policy_handler.new_workflow(running)
+
+
 if __name__ == '__main__':
     import pprint
     from tukio.task import *
@@ -315,7 +442,7 @@ if __name__ == '__main__':
         await asyncio.sleep(2)
         future.cancel()
 
-    wf_dict = {
+    wflow_dict = {
         "title": "my-workflow",
         "tasks": [
             {"id": "f1", "name": "task1"},
@@ -334,38 +461,38 @@ if __name__ == '__main__':
             "f6": []
         }
     }
-    wf_tmpl = WorkflowTemplate.from_dict(wf_dict)
-    print("workflow uid: {}".format(wf_tmpl.uid))
-    # print("workflow graph: {}".format(wf_tmpl.dag.graph))
-    # print("workflow tasks: {}".format(wf_tmpl.tasks))
-    print("workflow root task: {}".format(wf_tmpl.root()))
+    wflow_tmpl = WorkflowTemplate.from_dict(wflow_dict)
+    print("workflow uid: {}".format(wflow_tmpl.uid))
+    # print("workflow graph: {}".format(wflow_tmpl.dag.graph))
+    # print("workflow tasks: {}".format(wflow_tmpl.tasks))
+    print("workflow root task: {}".format(wflow_tmpl.root()))
 
     # Run the workflow
-    wf_exec = Workflow(wf_tmpl, loop=ioloop)
-    wf_exec.run('simple')
+    wflow_exec = Workflow(wflow_tmpl, loop=ioloop)
+    wflow_exec.run('simple')
     try:
-        res = ioloop.run_until_complete(wf_exec)
+        res = ioloop.run_until_complete(wflow_exec)
     except Exception as exc:
-        print("workflow raised exception? {}".format(wf_exec.exception()))
+        print("workflow raised exception? {}".format(wflow_exec.exception()))
     else:
         print("workflow returned: {}".format(res))
     finally:
-        print("workflow is done? {}".format(wf_exec.done()))
+        print("workflow is done? {}".format(wflow_exec.done()))
         print("workflow report:")
-        pprint.pprint(wf_exec.report())
+        pprint.pprint(wflow_exec.report())
 
     # Run again the same workflow
-    wf_exec.run('again')
-    res = ioloop.run_until_complete(wf_exec)
+    wflow_exec.run('again')
+    res = ioloop.run_until_complete(wflow_exec)
     print("workflow returned: {}".format(res))
-    print("workflow is done? {}".format(wf_exec.done()))
+    print("workflow is done? {}".format(wflow_exec.done()))
 
     # Run and cancel the workflow
-    wf_exec = Workflow(wf_tmpl, loop=ioloop)
-    cancel_task = asyncio.ensure_future(cancellator(wf_exec))
-    wf_exec.run('cancel')
-    futs = [wf_exec, cancel_task]
+    wflow_exec = Workflow(wflow_tmpl, loop=ioloop)
+    cancel_task = asyncio.ensure_future(cancellator(wflow_exec))
+    wflow_exec.run('cancel')
+    futs = [wflow_exec, cancel_task]
     res = ioloop.run_until_complete(asyncio.wait(futs))
     print("workflow returned: {}".format(res))
-    print("workflow is done? {}".format(wf_exec.done()))
-    print("workflow is cancelled? {}".format(wf_exec.cancelled()))
+    print("workflow is done? {}".format(wflow_exec.done()))
+    print("workflow is cancelled? {}".format(wflow_exec.cancelled()))
