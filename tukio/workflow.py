@@ -239,12 +239,9 @@ class Workflow(asyncio.Future):
         if self._all_tasks_done() and not self.done():
             if self._new_task_exc:
                 self.set_exception(self._new_task_exc)
-                state = 'exception'
             elif self._must_cancel:
-                state = 'cancelled'
                 super().cancel()
             else:
-                state = 'finished'
                 self.set_result(self.tasks)
             self._end = datetime.utcnow()
 
@@ -286,7 +283,7 @@ class Workflow(asyncio.Future):
         tasks templates and execution details.
         """
         wf_exec = {"id": self.uid, "start": self._start, "end": self._end}
-        wf_exec['state'] = future_state(self)
+        wf_exec['state'] = future_state(self).value
         report = self._wf_tmpl.as_dict()
         report['exec'] = wf_exec
         return report

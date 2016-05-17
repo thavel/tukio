@@ -84,7 +84,6 @@ def new_task(task_name, inputs=((), {}), config=None, loop=None):
         task_holder = klass(config)
         coro = coro_fn(task_holder, *args, **kwargs)
     else:
-        task_holder = None
         coro = coro_fn(*args, **kwargs)
     return asyncio.ensure_future(coro, loop=loop)
 

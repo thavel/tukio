@@ -92,5 +92,5 @@ class TaskTemplate:
                 uid = self.task.uid
             else:
                 uid = None
-            state = future_state(self.task)
+            state = future_state(self.task).value
             return {"id": uid, "state": state}
