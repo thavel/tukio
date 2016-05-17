@@ -43,18 +43,12 @@ class TaskHolder:
     TASK_NAME = None
 
     def __init__(self, config=None):
-        self._config = config
-        self._uid = str(uuid4())
-        self._task = None
+        self.config = config
+        self.uid = str(uuid4())
 
-    @property
-    def config(self):
-        return self._config
-
-    @property
-    def uid(self):
+    def report(self):
         """
-        Returns the task holder's ID.
-        There's no setter for this attribute as it should never change.
+        Returns an execution report (a dict). When defined, this method is used
+        by the workflow execution engine to build the dict that represents an
+        execution of a task.
         """
-        return self._uid

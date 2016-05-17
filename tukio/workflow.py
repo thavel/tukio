@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import sys
-import weakref
 import functools
 from uuid import uuid4
+from datetime import datetime
 
 from tukio.dag import DAG
 from tukio.task import TaskTemplate
+from tukio.utils import future_state
 
 
 logger = logging.getLogger(__name__)
@@ -29,19 +30,16 @@ class WorkflowTemplate(object):
     It provides an API to easily build and update a consistent workflow.
     """
 
-    def __init__(self, uid=None):
-        # Unique execution ID of the workflow
+    def __init__(self, title, uid=None, tags=None, version=None):
+        self.title = title
+        self.tags = tags or []
         self.uid = uid or str(uuid4())
-        self._dag = DAG()
-        self._tasks = weakref.WeakValueDictionary()
-
-    @property
-    def dag(self):
-        return self._dag
+        self.version = int(version) if version is not None else 1
+        self.dag = DAG()
 
     @property
     def tasks(self):
-        return dict(self._tasks)
+        return list(self.dag.graph.keys())
 
     def add(self, task_tmpl):
         """
@@ -52,7 +50,6 @@ class WorkflowTemplate(object):
         if not isinstance(task_tmpl, TaskTemplate):
             raise TypeError("expected a 'TaskTemplate' instance")
         self.dag.add_node(task_tmpl)
-        self._tasks[task_tmpl.uid] = task_tmpl
 
     def delete(self, task_tmpl):
         """
@@ -60,13 +57,6 @@ class WorkflowTemplate(object):
         upstream/downstream tasks.
         """
         self.dag.delete_node(task_tmpl)
-
-    def get(self, task_id):
-        """
-        Returns the task object that has the searched task ID. Returns 'None'
-        if the task ID was not found.
-        """
-        return self._tasks.get(task_id, None)
 
     def root(self):
         """
@@ -101,9 +91,10 @@ class WorkflowTemplate(object):
         Build a new workflow description from the given dictionary.
         The dictionary takes the form of:
             {
-                "uid": <workflow-uid>
+                "title": <workflow-title>,
+                "id": <workflow-uid>,
                 "tasks": [
-                    {"uid": <task-uid>, "name": <name>, "config": <cfg-dict>},
+                    {"id": <task-uid>, "name": <name>, "config": <cfg-dict>},
                     ...
                 ],
                 "graph": {
@@ -113,33 +104,47 @@ class WorkflowTemplate(object):
                 }
             }
         """
-        uid = wf_dict['uid']
-        wf_tmpl = cls(uid)
+        # 'title' is the only mandatory key
+        title, uid = wf_dict['title'], wf_dict.get('id')
+        tags, version = wf_dict.get('tags'), wf_dict.get('version')
+        wf_tmpl = cls(title, uid=uid, tags=tags, version=version)
+        task_ids = dict()
         for task_dict in wf_dict['tasks']:
             task_tmpl = TaskTemplate.from_dict(task_dict)
             wf_tmpl.add(task_tmpl)
+            task_ids[task_tmpl.uid] = task_tmpl
         for up_id, down_ids_set in wf_dict['graph'].items():
-            up_desc = wf_tmpl.get(up_id)
+            up_tmpl = task_ids[up_id]
             for down_id in down_ids_set:
-                down_desc = wf_tmpl.get(down_id)
-                wf_tmpl.link(up_desc, down_desc)
+                down_tmpl = task_ids[down_id]
+                wf_tmpl.link(up_tmpl, down_tmpl)
         return wf_tmpl
 
     def as_dict(self):
         """
-        Build a dictionary that represents the current workflow description
-        object.
+        Builds and returns a dictionary that represents the current workflow
+        template object.
         """
-        wf_dict = {"uid": self.uid, "tasks": [], "graph": {}}
-        for task_id, task_tmpl in self.tasks.items():
-            task_dict = {"uid": task_id, "name": task_tmpl.name}
-            if task_tmpl.config:
-                task_dict['config'] = task_tmpl.config
-            wf_dict['tasks'].append(task_dict)
-        for up_desc, down_descs_set in self.dag.graph.items():
-            _record = {up_desc.uid: list(map(lambda x: x.uid, down_descs_set))}
+        wf_dict = {
+            "title": self.title, "id": self.uid,
+            "tags": self.tags, "version": int(self.version),
+            "tasks": [], "graph": {}
+        }
+        for task_tmpl in self.tasks:
+            wf_dict['tasks'].append(task_tmpl.as_dict())
+        for up_tmpl, down_tmpls_set in self.dag.graph.items():
+            _record = {up_tmpl.uid: list(map(lambda x: x.uid, down_tmpls_set))}
             wf_dict['graph'].update(_record)
         return wf_dict
+
+    def copy(self):
+        """
+        Returns a new instance that is a copy of the current workflow template.
+        """
+        wf_tmpl = WorkflowTemplate(self.title, uid=self.uid,
+                                   tags=self.tags, version=self.version)
+        wf_tmpl.dag = self.dag.copy()
+        return wf_tmpl
 
 
 class Workflow(asyncio.Future):
@@ -149,62 +154,53 @@ class Workflow(asyncio.Future):
     way of workflow execution.
     """
 
-    def __init__(self, wf_tmpl, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._wf_tmpl = wf_tmpl
-        self._wf_exec = dict()
-        self._task_exception = None
+    def __init__(self, wf_tmpl, *, loop=None):
+        super().__init__(loop=loop)
+        self.uid = str(uuid4())
+        # Always act on a copy of the original workflow template
+        self._wf_tmpl = wf_tmpl.copy()
+        # Start and end datetime (UTC) of the execution of the workflow
+        self._start, self._end = None, None
+        # List of tasks executed
+        self.tasks = []
+        self._new_task_exc = None
         self._must_cancel = False
-
-    @property
-    def tasks(self):
-        """
-        Returns the list of all tasks pending or done.
-        """
-        return list(self._wf_exec.keys())
-
-    def _add_task(self, task, parent=None):
-        """
-        Adds a task to the exec graph and optionally adds an edge from the
-        parent task to this task.
-        """
-        self._wf_exec[task] = set()
-        if parent:
-            self._wf_exec[parent].add(task)
 
     def run(self, *args, **kwargs):
         """
         Execute the workflow following the description passed at init.
         """
         # A workflow can be ran only once
-        if self._wf_exec:
+        if self.tasks:
             return
         # Run the root task
         root_tmpl = self._wf_tmpl.root()
-        self._new_task(root_tmpl, (args, kwargs))
+        task = self._new_task(root_tmpl, (args, kwargs))
+        self._start = datetime.utcnow()
+        # The workflow may fail to start at once
+        if not task:
+            self._try_mark_done()
 
     def _new_task(self, task_tmpl, inputs, parent=None):
         """
         Each new task must be created successfully, else the whole workflow
-        shall stop running.
+        shall stop running (wrong workflow config or bug).
         """
         try:
             args, kwargs = inputs
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
         except Exception as exc:
-            cancelled = self._cancel_all_tasks()
-            # if there are pending tasks being cancelled, we must wait for
-            # those tasks to be done and delay the call to `set_exception()`
-            if cancelled > 0:
-                self._task_exception = exc
-                return None
-            else:
-                self.set_exception(exc)
-                raise
+            logger.warning('failed to created task for'
+                           ' {}: {}'.format(task_tmpl, exc))
+            self._new_task_exc = exc
+            self._cancel_all_tasks()
+            return None
         else:
+            logger.debug('new task created for {}'.format(task_tmpl))
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
-            self._add_task(task, parent=parent)
+            self.tasks.append(task)
+            return task
 
     def _run_next_tasks(self, task_tmpl, future):
         """
@@ -215,12 +211,12 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
             return
         # Don't execute downstream tasks if the task's result is an exception
-        # (may include task cancellation) but don't stop the other branches
-        # of the workflow.
+        # (may include task cancellation) but don't stop executing the other
+        # branches of the workflow.
         try:
             result = future.result()
         except Exception as exc:
-            pass
+            logger.warning('task {} ended on {}'.format(task_tmpl, exc))
         else:
             succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
@@ -241,12 +237,16 @@ class Workflow(asyncio.Future):
         # done callback from another task executed in the same iteration of the
         # event loop.
         if self._all_tasks_done() and not self.done():
-            if self._task_exception:
-                self.set_exception(self._task_exception)
+            if self._new_task_exc:
+                self.set_exception(self._new_task_exc)
+                state = 'exception'
             elif self._must_cancel:
+                state = 'cancelled'
                 super().cancel()
             else:
-                self.set_result(self._wf_exec)
+                state = 'finished'
+                self.set_result(self.tasks)
+            self._end = datetime.utcnow()
 
     def _all_tasks_done(self):
         """
@@ -280,10 +280,22 @@ class Workflow(asyncio.Future):
             super().cancel()
         return True
 
+    def report(self):
+        """
+        Creates and returns a complete execution report, including workflow and
+        tasks templates and execution details.
+        """
+        wf_exec = {"id": self.uid, "start": self._start, "end": self._end}
+        wf_exec['state'] = future_state(self)
+        report = self._wf_tmpl.as_dict()
+        report['exec'] = wf_exec
+        return report
+
 
 if __name__ == '__main__':
+    import pprint
     from tukio.task import *
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
                         format='%(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)])
     ioloop = asyncio.get_event_loop()
@@ -307,14 +319,14 @@ if __name__ == '__main__':
         future.cancel()
 
     wf_dict = {
-        "uid": "my-workflow",
+        "title": "my-workflow",
         "tasks": [
-            {"uid": "f1", "name": "task1"},
-            {"uid": "f2", "name": "task1"},
-            {"uid": "f3", "name": "task1"},
-            {"uid": "f4", "name": "task1"},
-            {"uid": "f5", "name": "task1"},
-            {"uid": "f6", "name": "task1"}
+            {"id": "f1", "name": "task1"},
+            {"id": "f2", "name": "task1"},
+            {"id": "f3", "name": "task1"},
+            {"id": "f4", "name": "task1"},
+            {"id": "f5", "name": "task1"},
+            {"id": "f6", "name": "task1"}
         ],
         "graph": {
             "f1": ["f2"],
@@ -334,9 +346,16 @@ if __name__ == '__main__':
     # Run the workflow
     wf_exec = Workflow(wf_tmpl, loop=ioloop)
     wf_exec.run('simple')
-    res = ioloop.run_until_complete(wf_exec)
-    print("workflow returned: {}".format(res))
-    print("workflow is done? {}".format(wf_exec.done()))
+    try:
+        res = ioloop.run_until_complete(wf_exec)
+    except Exception as exc:
+        print("workflow raised exception? {}".format(wf_exec.exception()))
+    else:
+        print("workflow returned: {}".format(res))
+    finally:
+        print("workflow is done? {}".format(wf_exec.done()))
+        print("workflow report:")
+        pprint.pprint(wf_exec.report())
 
     # Run again the same workflow
     wf_exec.run('again')
