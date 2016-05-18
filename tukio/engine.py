@@ -21,6 +21,10 @@ class Engine:
         self._lock = asyncio.Lock()
         self._running_by_id = weakref.WeakValueDictionary()
 
+    @property
+    def templates(self):
+        return self._templates
+
     def _add_wflow(self, wflow):
         """
         Adds a new entry into the dict of running workflows and updates the
@@ -43,7 +47,9 @@ class Engine:
         del self._running_by_id[wflow.uid]
 
     def stop(self):
-        pass
+        """
+        Cancels all workflows and prevent new instances from being run.
+        """
 
     def _run_in_task(self, callback, *args, **kwargs):
         """
@@ -76,15 +82,13 @@ class Engine:
             else:
                 self._templates[wf_tmpl.uid] = wf_tmpl
 
-    async def load(self, templates):
+    async def load(self, tmpl_dict):
         """
-        A coroutine that loads a new set of workflow templates while preventing
-        other coroutines from updating the dict of loaded templates in the mean
-        time.
+        A coroutine that loads a new workflow template while preventing other
+        coroutines from updating the dict of loaded templates in the mean time.
         """
         with await self._lock:
-            for tmpl_dict in templates:
-                await self._run_in_task(self._load, tmpl_dict)
+            await self._run_in_task(self._load, tmpl_dict)
 
     async def reload(self, templates):
         """
@@ -93,7 +97,20 @@ class Engine:
         """
         with await self._lock:
             self._templates = dict()
-        await self.load(templates)
+            for tmpl_dict in templates:
+                await self._run_in_task(self._load, tmpl_dict)
+
+    async def unload(self, template_id):
+        """
+        Unloads a workflow template from the engine. Returns True if the
+        template was found and actually unloaded, else, returns False.
+        """
+        with await self._lock:
+            try:
+                del self._templates[template_id]
+            except KeyError:
+                return False
+            return True
 
     async def data_received(self, data):
         """
