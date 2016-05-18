@@ -3,7 +3,7 @@ import inspect
 import logging
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class _BrokerRegistry:
@@ -71,7 +71,7 @@ class Broker(object):
             self._handlers.remove(coro_or_cb)
         except ValueError:
             warn = '{} is not registered in broker, cannot unregister'
-            logger.warning(warn.format(coro_or_cb))
+            log.warning(warn.format(coro_or_cb))
 
 
 def get_broker(loop=None):

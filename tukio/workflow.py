@@ -11,7 +11,7 @@ from tukio.task import TaskTemplate
 from tukio.utils import future_state
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class WorkflowError(Exception):
@@ -307,13 +307,13 @@ class Workflow(asyncio.Future):
             args, kwargs = inputs
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
         except Exception as exc:
-            logger.warning('failed to created task for'
+            log.warning('failed to created task for'
                            ' {}: {}'.format(task_tmpl, exc))
             self._new_task_exc = exc
             self._cancel_all_tasks()
             return None
         else:
-            logger.debug('new task created for {}'.format(task_tmpl))
+            log.debug('new task created for {}'.format(task_tmpl))
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
             self.tasks.append(task)
@@ -333,7 +333,7 @@ class Workflow(asyncio.Future):
         try:
             result = future.result()
         except Exception as exc:
-            logger.warning('task {} ended on {}'.format(task_tmpl, exc))
+            log.warning('task {} ended on {}'.format(task_tmpl, exc))
         else:
             succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
@@ -394,6 +394,15 @@ class Workflow(asyncio.Future):
             super().cancel()
         return True
 
+    def __str__(self):
+        """
+        Readable string representation of a workflow execution object.
+        """
+        string = ("<Workflow template_id={}, template_title={}, uid={}, "
+                  "start={}, end={}>")
+        tmpl_id, title = self.template_id, self._wf_tmpl.title
+        return string.format(tmpl_id, title, self.uid, self._start, self._end)
+
     def report(self):
         """
         Creates and returns a complete execution report, including workflow and
@@ -428,14 +437,14 @@ if __name__ == '__main__':
     @register('task1')
     async def task1(inputs=None):
         task = asyncio.Task.current_task()
-        logger.info('running task: {}'.format(task))
-        logger.info('{} ==> received {}'.format(task.uid, inputs))
-        logger.info('{} ==> hello world #1'.format(task.uid))
-        logger.info('{} ==> hello world #2'.format(task.uid))
+        log.info('running task: {}'.format(task))
+        log.info('{} ==> received {}'.format(task.uid, inputs))
+        log.info('{} ==> hello world #1'.format(task.uid))
+        log.info('{} ==> hello world #2'.format(task.uid))
         await asyncio.sleep(0.5)
-        logger.info('{} ==> hello world #3'.format(task.uid))
+        log.info('{} ==> hello world #3'.format(task.uid))
         await asyncio.sleep(0.5)
-        logger.info('{} ==> hello world #4'.format(task.uid))
+        log.info('{} ==> hello world #4'.format(task.uid))
         return 'Oops I dit it again! from {}'.format(task.uid)
 
     async def cancellator(future):

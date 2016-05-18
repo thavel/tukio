@@ -12,7 +12,7 @@ import logging
 import inspect
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 # Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
@@ -101,10 +101,10 @@ if __name__ == '__main__':
     @register('holder-task', 'execute')
     class MyTaskHolder(TaskHolder):
         async def execute(self, arg=None):
-            logger.info('{} ==> inputs: {}'.format(self.uid, arg))
-            logger.info('{} ==> config: {}'.format(self.uid, self.config))
+            log.info('{} ==> inputs: {}'.format(self.uid, arg))
+            log.info('{} ==> config: {}'.format(self.uid, self.config))
             await asyncio.sleep(0.5)
-            logger.info('{} ==> {} had a good rest!'.format(self.uid,
+            log.info('{} ==> {} had a good rest!'.format(self.uid,
                                                             self.TASK_NAME))
             if isinstance(arg, TukioTask):
                 arg.cancel()
@@ -114,13 +114,13 @@ if __name__ == '__main__':
     @register('coro-task')
     async def mytask(*args, **kwargs):
         task = asyncio.Task.current_task()
-        logger.info('{} ==> inputs: {}, {}'.format(task.uid, args, kwargs))
-        logger.info('{} ==> hello world #1'.format(task.uid))
-        logger.info('{} ==> hello world #2'.format(task.uid))
+        log.info('{} ==> inputs: {}, {}'.format(task.uid, args, kwargs))
+        log.info('{} ==> hello world #1'.format(task.uid))
+        log.info('{} ==> hello world #2'.format(task.uid))
         await asyncio.sleep(0.5)
-        logger.info('{} ==> hello world #3'.format(task.uid))
+        log.info('{} ==> hello world #3'.format(task.uid))
         await asyncio.sleep(1)
-        logger.info('{} ==> hello world #4'.format(task.uid))
+        log.info('{} ==> hello world #4'.format(task.uid))
         return 'Oops I dit it again!'
 
     print('Registry object from main: {}'.format(TaskRegistry))

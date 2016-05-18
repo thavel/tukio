@@ -3,10 +3,14 @@ Tukio Workflow Engine
 """
 import asyncio
 import weakref
+import logging
 
 from tukio.workflow import WorkflowTemplate, OverrunPolicy, new_workflow
 from tukio.broker import get_broker
 from tukio.task import tukio_factory
+
+
+log = logging.getLogger(__name__)
 
 
 class DuplicateWorkflowError(Exception):
@@ -39,6 +43,7 @@ class Engine:
         except KeyError:
             self._running[wflow.template_id] = [wflow]
         self._running_by_id[wflow.uid] = wflow
+        log.debug('new workflow added to the running list: {}'.format(wflow))
 
     def _remove_wflow(self, wflow):
         """
@@ -49,6 +54,7 @@ class Engine:
         if len(self._running[wflow.template_id]) == 0:
             del self._running[wflow.template_id]
         del self._running_by_id[wflow.uid]
+        log.debug('workflow removed from the running list: {}'.format(wflow))
 
     def stop(self):
         """
@@ -188,6 +194,7 @@ class Engine:
         wflow = self._running_by_id.get(exec_id)
         if wflow:
             wflow.cancel()
+            log.debug('cancelled workflow {}'.format(wflow))
         return wflow
 
     def cancel_all(self):
@@ -200,4 +207,5 @@ class Engine:
                 is_cancelled = wflow.cancel()
                 if is_cancelled:
                     cancelled += 1
-        return
+        log.debug('cancelled {} workflows'.format(cancelled))
+        return cancelled
