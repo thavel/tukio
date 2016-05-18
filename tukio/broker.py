@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 
 
@@ -33,36 +34,44 @@ class Broker(object):
     the execution of registered handlers.
     An event is fired with a topic. Registered handlers are executed each time
     an event is fired on that topic.
+
+    Note: this class is not thread-safe. Its methods must be called from within
+    the same thread as the thread running the event loop used by the workflow
+    engine (including the broker)
     """
 
     def __init__(self, loop=None):
         self._loop = loop or asyncio.get_event_loop()
-        self._handlers = dict()
+        self._handlers = []
 
-    def fire(self, topic, data):
+    def dispatch(self, data):
         """
         Passes an event (aka the data) received to each registered handler.
         """
-        try:
-            handlers = self._handlers[topic]
-        except KeyError:
-            logger.warning("No handler registered for topic '{}'".format(topic))
-            return
-        for handler in handlers:
-            asyncio.ensure_future(handler(data), loop=self._loop)
+        for handler in self._handlers:
+            if asyncio.iscoroutinefunction(handler):
+                asyncio.ensure_future(handler(data), loop=self._loop)
+            else:
+                self._loop.call_soon(handler, data)
 
-    def register(self, handler, topic=None):
+    def register(self, coro_or_cb):
         """
-        Register a handler to be executed upon receiving events in a given
-        topic.
+        Registers a coroutine or a regular function to be executed upon
+        receiving events.
         """
-        if not asyncio.iscoroutinefunction(handler):
-            raise ValueError('handler must be a coroutine')
+        if not inspect.isfunction(coro_or_cb):
+            raise TypeError('{} is not a function'.format(coro_or_cb))
+        self._handlers.append(coro_or_cb)
 
+    def unregister(self, coro_or_cb):
+        """
+        Removes a coroutine or a regular function from the registered handlers.
+        """
         try:
-            self._handlers[topic].append(handler)
-        except KeyError:
-            self._handlers[topic] = [handler]
+            self._handlers.remove(coro_or_cb)
+        except ValueError:
+            warn = '{} is not registered in broker, cannot unregister'
+            logger.warning(warn.format(coro_or_cb))
 
 
 def get_broker(loop=None):

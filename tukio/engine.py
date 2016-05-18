@@ -11,20 +11,19 @@ class DuplicateWorkflowError(Exception):
     pass
 
 
-class WorkflowEngine:
+class Engine:
     def __init__(self, *, loop=None):
         self._loop = loop or asyncio.get_event_loop()
-        self.templates = dict()
+        self._templates = dict()
         self._running = dict()
-        self._broker = get_broker()
-
-    def start(self):
-        pass
+        self._broker = get_broker(self._loop)
+        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()
 
     def stop(self):
         pass
 
-    def load(self, templates):
+    def _load(self, templates):
         """
         Loads a list of workflow templates into the engine. Each workflow may
         be triggered as soon as it is loaded.
@@ -39,41 +38,65 @@ class WorkflowEngine:
             # (template ID, version)
             duplicate = None
             try:
-                duplicate = self.templates[wf_tmpl.uid]
+                duplicate = self._templates[wf_tmpl.uid]
             except KeyError:
-                self.templates[wf_tmpl.uid] = wf_tmpl
+                self._templates[wf_tmpl.uid] = wf_tmpl
             else:
                 if duplicate.version == wf_tmpl.version:
                     raise DuplicateWorkflowError
                 else:
-                    self.templates[wf_tmpl.uid] = wf_tmpl
+                    self._templates[wf_tmpl.uid] = wf_tmpl
 
-    def reload(self, templates):
+    async def load(self, templates):
+        """
+        A coroutine that loads a new set of workflow templates while preventing
+        other coroutines from updating the dict of loaded templates in the mean
+        time.
+        """
+        with await self._lock:
+            self._load(templates)
+
+    async def reload(self, templates):
         """
         Replaces the current list of loaded workflow templates by a new one.
         This operation does not affect workflow executions in progress.
         """
-        self.templates = dict()
-        self.load(templates)
+        with await self._lock:
+            self._templates = dict()
+            self.load(templates)
 
-    def data_received(self, data, topic=None):
+    async def data_received(self, data):
         """
         This method should be called to pass an event to the workflow engine
-        which in turn will disptach this event to the right workflows.
+        which in turn will disptach this event to the right running workflows
+        and may trigger new workflow executions.
         """
-        self._broker.fire(data, topic)
-        # Try to run new workflow instances at all times
-        for tmpl_id in self._running:
-            self._try_run(tmpl_id)
+        self._broker.dispatch(data)
+        with await self._lock:
+            # Try to run new workflow instances at all times
+            for tmpl_id in self._running:
+                self._try_run(tmpl_id, data)
+            # Trigger workflows from templates that has no running instance
+            idle_tmpl_ids = self._get_idle_tmpl_ids()
+            for tmpl_id in idle_tmpl_ids:
+                self._try_run(tmpl_id, data)
 
-    def _try_run(self, tmpl_id):
+    def _get_idle_tmpl_ids(self):
+        """
+        Returns the set of templates that has no running instance.
+        """
+        template_ids = set(self._templates.keys())
+        running_tmpl_ids = set(self._running.keys())
+        return template_ids - running_tmpl_ids
+
+    def _try_run(self, tmpl_id, data):
         """
         Try to run a new instance of workflow defined by `tmpl_id` according to
         the instances already running and the overrun policy.
         """
-        running = self._running[tmpl_id]
+        running = self._running.get(tmpl_id)
         try:
-            wf_tmpl = self.templates[tmpl_id]
+            wf_tmpl = self._templates[tmpl_id]
         except KeyError:
             # the workflow template is no longer loaded in the engine; nothing
             # to run!
@@ -83,14 +106,22 @@ class WorkflowEngine:
         wflow = new_workflow(wf_tmpl, running=running, loop=self._loop)
         if wflow:
             if wf_tmpl.policy == OverrunPolicy.abort_running and running:
-                asyncio.ensure_future(self._wait_abort(wflow, running))
+                def cb():
+                    wflow.run(data)
+                asyncio.ensure_future(self._wait_abort(running, cb))
             else:
-                wflow.run()
+                wflow.run(data)
+            self._running[tmpl_id].append(wflow)
 
-    async def _wait_abort(self, wflow, running):
+    async def _wait_abort(self, running, callback):
         """
         Wait for the end of a list of aborted (cancelled) workflows before
         starting a new one when the policy is 'abort-running'.
         """
         await asyncio.wait(running)
-        wflow.run()
+        callback()
+
+    def cancel(self, exec_id):
+        """
+        Cancels an execution of workflow identified by its execution ID.
+        """
