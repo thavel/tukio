@@ -65,7 +65,7 @@ class OverrunPolicyHandler:
         self.policy = template.policy
 
     def new_workflow(self, running=None):
-        method = getattr('_' + self.policy.name)
+        method = getattr(self, '_' + self.policy.name)
         return method(running)
 
     def _check_wflow(self, wflow):
@@ -274,8 +274,9 @@ class Workflow(asyncio.Future):
         self._wf_tmpl = wf_tmpl.copy()
         # Start and end datetime (UTC) of the execution of the workflow
         self._start, self._end = None, None
-        # List of tasks executed
-        self.tasks = []
+        # List of tasks executed at some point
+        self.tasks = set()
+        self._done_tasks = set()
         self._new_task_exc = None
         self._must_cancel = False
 
@@ -307,8 +308,8 @@ class Workflow(asyncio.Future):
             args, kwargs = inputs
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
         except Exception as exc:
-            log.warning('failed to created task for'
-                           ' {}: {}'.format(task_tmpl, exc))
+            warn = 'failed to create task {}: raised {}'
+            log.warning(warn.format(task_tmpl, exc))
             self._new_task_exc = exc
             self._cancel_all_tasks()
             return None
@@ -316,7 +317,7 @@ class Workflow(asyncio.Future):
             log.debug('new task created for {}'.format(task_tmpl))
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
-            self.tasks.append(task)
+            self.tasks.add(task)
             return task
 
     def _run_next_tasks(self, task_tmpl, future):
@@ -324,6 +325,7 @@ class Workflow(asyncio.Future):
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
         """
+        self._done_tasks.add(future)
         if self._must_cancel:
             self._try_mark_done()
             return
@@ -365,11 +367,13 @@ class Workflow(asyncio.Future):
     def _all_tasks_done(self):
         """
         Returns True if all tasks are done, else returns False.
+        Here, a task is considered as 'done' only if it is marked as done and
+        its `_run_next_tasks()` done callback has been called.
         """
-        for task in self.tasks:
-            if not task.done():
-                return False
-        return True
+        if self.tasks == self._done_tasks:
+            return True
+        else:
+            return False
 
     def _cancel_all_tasks(self):
         """
@@ -377,9 +381,10 @@ class Workflow(asyncio.Future):
         """
         self._must_cancel = True
         cancelled = 0
-        for task in self.tasks:
-            if not task.done():
-                task.cancel()
+        pending = self.tasks - self._done_tasks
+        for task in pending:
+            is_cancelled = task.cancel()
+            if is_cancelled:
                 cancelled += 1
         return cancelled
 
