@@ -6,6 +6,7 @@ import weakref
 
 from tukio.workflow import WorkflowTemplate, OverrunPolicy, new_workflow
 from tukio.broker import get_broker
+from tukio.task import tukio_factory
 
 
 class DuplicateWorkflowError(Exception):
@@ -15,6 +16,8 @@ class DuplicateWorkflowError(Exception):
 class Engine:
     def __init__(self, *, loop=None):
         self._loop = loop or asyncio.get_event_loop()
+        # use the custom asyncio task factory
+        self._loop.set_task_factory(tukio_factory)
         self._templates = dict()
         self._running = dict()
         self._broker = get_broker(self._loop)
