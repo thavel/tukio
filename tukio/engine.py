@@ -23,6 +23,7 @@ class Engine:
         self._broker = get_broker(self._loop)
         self._lock = asyncio.Lock()
         self._running_by_id = weakref.WeakValueDictionary()
+        self._must_stop = False
 
     @property
     def templates(self):
@@ -53,6 +54,8 @@ class Engine:
         """
         Cancels all workflows and prevent new instances from being run.
         """
+        self._must_stop = True
+        self.cancel_all()
 
     def _run_in_task(self, callback, *args, **kwargs):
         """
@@ -122,6 +125,9 @@ class Engine:
         and may trigger new workflow executions.
         """
         self._broker.dispatch(data)
+        # Don't start new workflow instances if `stop()` was called.
+        if self._must_stop:
+            return
         with await self._lock:
             # Try to trigger new workflows from the current dict of workflow
             # templates at all times!
@@ -144,7 +150,7 @@ class Engine:
         # instances may run with an old version of the template)
         wflow = new_workflow(wf_tmpl, running=running, loop=self._loop)
         if wflow:
-            wflow.add_done_callback(self._clean_done)
+            wflow.add_done_callback(self._remove_wflow)
             if wf_tmpl.policy == OverrunPolicy.abort_running and running:
                 def cb():
                     wflow.run(data)
@@ -161,14 +167,17 @@ class Engine:
         await asyncio.wait(running)
         callback()
 
-    def _clean_done(self, future):
+    def run(self, tmpl_id, inputs):
         """
-        Cleanup actions when a workflow is done.
+        Starts a new execution of the workflow template identified by `tmpl_id`
+        regardless of the overrun policy and already running workflows.
         """
-        async def with_lock():
-            with await self._lock:
-                self._remove_wflow(future)
-        asyncio.ensure_future(with_lock())
+        wf_tmpl = self._templates[tmpl_id]
+        wflow = new_workflow(wf_tmpl, loop=self._loop)
+        wflow.add_done_callback(self._remove_wflow)
+        wflow.run(inputs)
+        self._add_wflow(wflow)
+        return wflow
 
     def cancel(self, exec_id):
         """
@@ -177,6 +186,18 @@ class Engine:
         If the workflow could not be found, returns None.
         """
         wflow = self._running_by_id.get(exec_id)
-        if wflow and not wflow.done():
+        if wflow:
             wflow.cancel()
         return wflow
+
+    def cancel_all(self):
+        """
+        Cancels all the running workflows.
+        """
+        cancelled = 0
+        for wf_list in self._running.values():
+            for wflow in wf_list:
+                is_cancelled = wflow.cancel()
+                if is_cancelled:
+                    cancelled += 1
+        return
