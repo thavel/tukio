@@ -15,6 +15,10 @@ import inspect
 log = logging.getLogger(__name__)
 
 
+class UnknownTaskName(Exception):
+    pass
+
+
 # Inspired from https://github.com/faif/python-patterns/blob/master/registry.py
 class TaskRegistry:
 
@@ -47,7 +51,10 @@ class TaskRegistry:
 
     @classmethod
     def get(cls, task_name):
-        return cls._registry[task_name]
+        try:
+            return cls._registry[task_name]
+        except KeyError:
+            raise UnknownTaskName
 
     @classmethod
     def all(cls):

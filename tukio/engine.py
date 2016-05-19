@@ -86,6 +86,7 @@ class Engine(asyncio.Future):
         This operation does not affect workflow executions in progress.
         """
         wf_tmpl = WorkflowTemplate.from_dict(tmpl_dict)
+        wf_tmpl.validate()
         # A workflow template is uniquely defined by the tuple
         # (template ID, version)
         duplicate = None

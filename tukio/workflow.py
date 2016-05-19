@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import Enum
 
 from tukio.dag import DAG
-from tukio.task import TaskTemplate
+from tukio.task import TaskTemplate, TaskRegistry
 from tukio.utils import future_state
 
 
@@ -264,6 +264,19 @@ class WorkflowTemplate(object):
                                    tags=self.tags, version=self.version)
         wf_tmpl.dag = self.dag.copy()
         return wf_tmpl
+
+    def validate(self):
+        """
+        Validate the current workflow template. At that point, we already know
+        the underlying DAG is valid. This methods ensures there's a single
+        root task and all task names are registered tasks.
+        If not valid, this method should raise either `WorkflowRootTaskError`
+        or `UnknownTaskName` exceptions.
+        """
+        self.root()
+        for task in self.tasks:
+            TaskRegistry.get(task.name)
+        return True
 
 
 class Workflow(asyncio.Future):
