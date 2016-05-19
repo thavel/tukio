@@ -80,38 +80,35 @@ class Engine(asyncio.Future):
             return callback(*args, **kwargs)
         return asyncio.ensure_future(coro(), loop=self._loop)
 
-    def _load(self, tmpl_dict):
+    def _load(self, template):
         """
         Loads a workflow template into the engine. Each workflow may be
         triggered as soon as it is loaded.
         Duplicates or invalid descriptions raise an exception.
         This operation does not affect workflow executions in progress.
         """
-        wf_tmpl = WorkflowTemplate.from_dict(tmpl_dict)
-        wf_tmpl.validate()
+        template.validate()
         # A workflow template is uniquely defined by the tuple
         # (template ID, version)
         duplicate = None
         try:
-            duplicate = self._templates[wf_tmpl.uid]
+            duplicate = self._templates[template.uid]
         except KeyError:
-            self._templates[wf_tmpl.uid] = wf_tmpl
+            self._templates[template.uid] = template
         else:
-            if duplicate.version == wf_tmpl.version:
+            if duplicate.version == template.version:
                 raise DuplicateWorkflowError
             else:
-                self._templates[wf_tmpl.uid] = wf_tmpl
-        log.debug("new workflow template added '{}'".format(wf_tmpl.title))
-        return wf_tmpl
+                self._templates[template.uid] = template
+        log.debug("new workflow template added '{}'".format(template.title))
 
-    async def load(self, tmpl_dict):
+    async def load(self, template):
         """
         A coroutine that loads a new workflow template while preventing other
         coroutines from updating the dict of loaded templates in the mean time.
         """
         with await self._lock:
-            wf_tmpl = await self._run_in_task(self._load, tmpl_dict)
-        return wf_tmpl
+            await self._run_in_task(self._load, template)
 
     async def reload(self, templates):
         """
@@ -120,8 +117,8 @@ class Engine(asyncio.Future):
         """
         with await self._lock:
             self._templates = dict()
-            for tmpl_dict in templates:
-                await self._run_in_task(self._load, tmpl_dict)
+            for tmpl in templates:
+                await self._run_in_task(self._load, tmpl)
 
     async def unload(self, template_id):
         """
