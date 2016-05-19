@@ -1,0 +1,3 @@
+A asynchronous library designed to create, manage and run workflows (Python 3.5 only!):
+
+This library has been written with a focus on reliability and developer-friendliness. Its design promotes single-threaded and asynchronous coding style through the extensive use of the [Python asyncio](https://docs.python.org/3/library/asyncio.html) event loop.
