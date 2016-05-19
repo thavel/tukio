@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import functools
+import inspect
 from uuid import uuid4
 from datetime import datetime
 from enum import Enum
@@ -20,6 +21,11 @@ class WorkflowError(Exception):
 
 class WorkflowRootTaskError(WorkflowError):
     pass
+
+
+class WorkflowNotFound(WorkflowError):
+    def __str__(self):
+        return 'no workfow bound to the task, cannot unlock it!'
 
 
 class OverrunPolicy(Enum):
@@ -103,7 +109,7 @@ class OverrunPolicyHandler:
         if running:
             for wflow in running:
                 self._check_wflow(wflow)
-                if wflow.is_locked():
+                if wflow.lock.locked():
                     break
             else:
                 return self._new_wflow()
@@ -279,10 +285,29 @@ class Workflow(asyncio.Future):
         self._done_tasks = set()
         self._new_task_exc = None
         self._must_cancel = False
+        self.lock = asyncio.Lock()
+        # Create the workflow in the 'locked' state when its overrun policy is
+        # 'skip-until-unlock'.
+        if self.policy is OverrunPolicy.skip_until_unlock:
+            self.lock._locked = True
 
     @property
     def template_id(self):
         return self._wf_tmpl.uid
+
+    @property
+    def policy(self):
+        return self._wf_tmpl.policy
+
+    def _unlock(self, _):
+        """
+        A done callback to unlock the workflow.
+        The concept of 'locked workflow' only applies when the overrun policy
+        is set to 'skip-until-unlock'. Once a task has unlocked the workflow,
+        new execution with the same template can be triggered.
+        """
+        if self.lock.locked():
+            self.lock.release()
 
     def run(self, *args, **kwargs):
         """
@@ -430,6 +455,32 @@ def new_workflow(wf_tmpl, running=None, loop=None):
     return policy_handler.new_workflow(running)
 
 
+def unlock_workflow_when_done():
+    """
+    Adds a done callback to the current task so as to unlock the workflow that
+    handles its execution when the task gets done.
+    If no workflow linked to the task can be found, raise an exception.
+    It assumes all tasks scheduled from within a workflow object have at least
+    one done callback which is a bound method from the workflow object.
+    """
+    task = asyncio.Task.current_task()
+    unlocked = 0
+    for cb in task._callbacks:
+        # inspect.getcallargs() gives acces to the implicit 'self' arg of the
+        # bound method but it is marked as deprecated since Python 3.5.1
+        # and the new `inspect.Signature` object does do the job :((
+        if inspect.ismethod(cb):
+            inst = cb.__self__
+        else:
+            continue
+        if isinstance(inst, Workflow):
+            task.add_done_callback(inst._unlock)
+            unlocked += 1
+    if unlocked == 0:
+        raise WorkflowNotFound
+    return unlocked
+
+
 if __name__ == '__main__':
     import pprint
     from tukio.task import *
@@ -450,7 +501,20 @@ if __name__ == '__main__':
         log.info('{} ==> hello world #3'.format(task.uid))
         await asyncio.sleep(0.5)
         log.info('{} ==> hello world #4'.format(task.uid))
+        unlock_workflow_when_done()
         return 'Oops I dit it again! from {}'.format(task.uid)
+
+    @register('task2')
+    async def task2(inputs=None):
+        task = asyncio.Task.current_task()
+        log.info('{} ==> received {}'.format(task.uid, inputs))
+        log.info('{} ==> unlock #1'.format(task.uid))
+        await asyncio.sleep(0.5)
+        unlock_workflow_when_done()
+        log.info('{} ==> unlock #2'.format(task.uid))
+        await asyncio.sleep(0.5)
+        log.info('{} ==> unlock #3'.format(task.uid))
+        return 'Unlock succeeded {}'.format(task.uid)
 
     async def cancellator(future):
         await asyncio.sleep(2)
@@ -510,3 +574,15 @@ if __name__ == '__main__':
     print("workflow returned: {}".format(res))
     print("workflow is done? {}".format(wflow_exec.done()))
     print("workflow is cancelled? {}".format(wflow_exec.cancelled()))
+
+    # Run a standalone task and try to unlock the workflow
+    mytask = asyncio.ensure_future(task2('try unlock workflow'))
+    try:
+        ioloop.run_until_complete(mytask)
+    except Exception as exc:
+        print("task raised exception? {}".format(str(exc)))
+    else:
+        print("task returned: {}".format(mytask.result()))
+    finally:
+        print("task is done? {}".format(mytask.done()))
+    ioloop.close()

@@ -66,6 +66,7 @@ class Engine(asyncio.Future):
         self._must_stop = True
         if force:
             self.cancel_all()
+        return self
 
     def _run_in_task(self, callback, *args, **kwargs):
         """
