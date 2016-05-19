@@ -9,3 +9,6 @@ Our current goal will include :
 * A clean python API to generate, run and keep track of multiple concurrent workflows
 * An event-driven workflow execution, letting us push actions into a running workflow and do something upon reaching a certain state for a particular task
 * A way to merge multiple task results
+
+## Asyncio loop task factory
+The asyncio task factory as been changed within the library using `set_task_factory`. Please make sure your project does not need to switch it itself too.
