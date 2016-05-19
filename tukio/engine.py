@@ -127,10 +127,10 @@ class Engine(asyncio.Future):
         """
         with await self._lock:
             try:
-                del self._templates[template_id]
+                template = self._templates.pop(template_id)
             except KeyError:
-                return False
-            return True
+                return None
+        return template
 
     async def data_received(self, data):
         """

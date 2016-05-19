@@ -23,7 +23,7 @@ class WorkflowRootTaskError(WorkflowError):
     pass
 
 
-class WorkflowNotFound(WorkflowError):
+class WorkflowNotFoundError(WorkflowError):
     def __str__(self):
         return 'no workfow bound to the task, cannot unlock it!'
 
@@ -462,23 +462,29 @@ def unlock_workflow_when_done():
     If no workflow linked to the task can be found, raise an exception.
     It assumes all tasks scheduled from within a workflow object have at least
     one done callback which is a bound method from the workflow object.
+
+    Note: bound methods from distinct workflow ojects in the task's
+    "call when done" list are not supported. It must never happen!
     """
     task = asyncio.Task.current_task()
-    unlocked = 0
     for cb in task._callbacks:
         # inspect.getcallargs() gives acces to the implicit 'self' arg of the
         # bound method but it is marked as deprecated since Python 3.5.1
         # and the new `inspect.Signature` object does do the job :((
         if inspect.ismethod(cb):
             inst = cb.__self__
+        elif isinstance(cb, functools.partial):
+            try:
+                inst = cb.func.__self__
+            except AttributeError:
+                continue
         else:
             continue
         if isinstance(inst, Workflow):
             task.add_done_callback(inst._unlock)
-            unlocked += 1
-    if unlocked == 0:
-        raise WorkflowNotFound
-    return unlocked
+            break
+    else:
+        raise WorkflowNotFoundError
 
 
 if __name__ == '__main__':
