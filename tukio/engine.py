@@ -55,7 +55,7 @@ class Engine(asyncio.Future):
             del self._running[wflow.template_id]
         del self._running_by_id[wflow.uid]
         log.debug('workflow removed from the running list: {}'.format(wflow))
-        if self._must_stop and not self._running:
+        if self._must_stop and not self._running and not self.done():
             self.set_result(None)
             log.debug('no more workflow running, engine stopped')
 
@@ -64,7 +64,9 @@ class Engine(asyncio.Future):
         Cancels all workflows and prevent new instances from being run.
         """
         self._must_stop = True
-        if force:
+        if not self._running and not self.done():
+            self.set_result(None)
+        elif force:
             self.cancel_all()
         return self
 
@@ -187,6 +189,8 @@ class Engine(asyncio.Future):
         Starts a new execution of the workflow template identified by `tmpl_id`
         regardless of the overrun policy and already running workflows.
         """
+        if self._must_stop:
+            return None
         wf_tmpl = self._templates[tmpl_id]
         wflow = new_workflow(wf_tmpl, loop=self._loop)
         wflow.add_done_callback(self._remove_wflow)
@@ -218,103 +222,3 @@ class Engine(asyncio.Future):
                     cancelled += 1
         log.debug('cancelled {} workflows'.format(cancelled))
         return cancelled
-
-
-if __name__ == '__main__':
-    import sys
-    from tukio import Engine
-    from tukio.task import register
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(message)s',
-                        handlers=[logging.StreamHandler(sys.stdout)])
-    ioloop = asyncio.get_event_loop()
-    engine = Engine(loop=ioloop)
-
-    @register('task1')
-    async def task1(inputs=None):
-        task = asyncio.Task.current_task()
-        log.info('{} ==> received {}'.format(task.uid, inputs))
-        log.info('{} ==> hello world #1'.format(task.uid))
-        log.info('{} ==> hello world #2'.format(task.uid))
-        await asyncio.sleep(0.5)
-        log.info('{} ==> hello world #3'.format(task.uid))
-        await asyncio.sleep(0.5)
-        log.info('{} ==> hello world #4'.format(task.uid))
-        return 'Oops I dit it again! from {}'.format(task.uid)
-
-    @register('task2')
-    async def task2(inputs=None):
-        task = asyncio.Task.current_task()
-        log.info('{} ==> received {}'.format(task.uid, inputs))
-        log.info('{} ==> bye bob #1'.format(task.uid))
-        await asyncio.sleep(0.5)
-        log.info('{} ==> bye bob #2'.format(task.uid))
-        log.info('{} ==> bye bob #3'.format(task.uid))
-        await asyncio.sleep(0.5)
-        log.info('{} ==> bye bob #4'.format(task.uid))
-        return 'I love jamon! from {}'.format(task.uid)
-
-    async def cancellator(future):
-        await asyncio.sleep(2)
-        future.cancel()
-
-    wflow_dict1 = {
-        "title": "workflow #1",
-        "tasks": [
-            {"id": "f1", "name": "task1"},
-            {"id": "f2", "name": "task2"},
-            {"id": "f3", "name": "task1"},
-            {"id": "f4", "name": "task2"},
-            {"id": "f5", "name": "task2"},
-            {"id": "f6", "name": "task1"}
-        ],
-        "graph": {
-            "f1": ["f2"],
-            "f2": ["f3", "f4"],
-            "f3": ["f5"],
-            "f4": ["f6"],
-            "f5": [],
-            "f6": []
-        }
-    }
-
-    wflow_dict2 = {
-        "title": "workflow #2",
-        "tasks": [
-            {"id": "f1", "name": "task2"},
-            {"id": "f2", "name": "task2"},
-            {"id": "f3", "name": "task1"},
-            {"id": "f4", "name": "task2"},
-            {"id": "f5", "name": "task1"},
-            {"id": "f6", "name": "task1"},
-            {"id": "f7", "name": "task2"}
-        ],
-        "graph": {
-            "f1": ["f2", "f3"],
-            "f2": ["f4"],
-            "f3": ["f5"],
-            "f4": ["f6"],
-            "f5": [],
-            "f6": ["f7"],
-            "f7": []
-        }
-    }
-    asyncio.ensure_future(engine.load(wflow_dict1), loop=ioloop)
-    asyncio.ensure_future(engine.load(wflow_dict2), loop=ioloop)
-    asyncio.ensure_future(engine.data_received('apple'), loop=ioloop)
-    ioloop.call_soon(engine.stop)
-
-    # print("workflow uid: {}".format(wflow_tmpl.uid))
-    # print("workflow graph: {}".format(wflow_tmpl.dag.graph))
-    # print("workflow tasks: {}".format(wflow_tmpl.tasks))
-    # print("workflow root task: {}".format(wflow_tmpl.root()))
-
-    # Run the workflow
-    try:
-        res = ioloop.run_until_complete(engine)
-    except Exception as exc:
-        print("engine raised exception? {}".format(engine.exception()))
-    else:
-        print("engine returned: {}".format(engine.result()))
-    finally:
-        print("engine is done? {}".format(engine.done()))
