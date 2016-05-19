@@ -228,11 +228,11 @@ class WorkflowTemplate(object):
         wf_tmpl = cls(title, uid=uid, tags=tags,
                       version=version, policy=policy)
         task_ids = dict()
-        for task_dict in wf_dict['tasks']:
+        for task_dict in wf_dict.get('tasks', []):
             task_tmpl = TaskTemplate.from_dict(task_dict)
             wf_tmpl.add(task_tmpl)
             task_ids[task_tmpl.uid] = task_tmpl
-        for up_id, down_ids_set in wf_dict['graph'].items():
+        for up_id, down_ids_set in wf_dict.get('graph', {}).items():
             up_tmpl = task_ids[up_id]
             for down_id in down_ids_set:
                 down_tmpl = task_ids[down_id]
