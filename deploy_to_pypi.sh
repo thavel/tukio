@@ -7,5 +7,5 @@ username = $PYPI_USER
 password = $PYPI_PASSWORD
 " > ~/.pypirc
 
-echo $(git describe --abbrev=0 --tags) > VERSION.txt
+echo $CIRCLE_TAG > VERSION.txt
 python setup.py sdist upload
