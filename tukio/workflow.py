@@ -1,11 +1,10 @@
 import asyncio
-import logging
-import sys
-import functools
-import inspect
-from uuid import uuid4
 from datetime import datetime
 from enum import Enum
+import functools
+import inspect
+import logging
+from uuid import uuid4
 
 from tukio.dag import DAG
 from tukio.task import TaskTemplate, TaskRegistry
