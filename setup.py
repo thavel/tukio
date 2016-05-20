@@ -8,9 +8,13 @@ try:
 except FileNotFoundError:
     version = '0.0.0-dev'
 
+with open('DESCRIPTION', 'r') as d:
+    long_description = d.read()
+
 setup(
     name='tukio',
     description='An event-based workflow library built around asyncio',
+    long_description=long_description,
     url='https://github.com/optiflows/tukio',
     author='Optiflows R&D',
     author_email='rand@surycat.com',
