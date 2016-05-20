@@ -1,5 +1,9 @@
 # Tukio
 
+[![Circle CI](https://img.shields.io/circleci/project/optiflows/tukio/master.svg)](https://circleci.com/gh/optiflows/tukio)
+[![pypi version](http://img.shields.io/pypi/v/tukio.svg)](https://pypi.python.org/pypi/tukio)
+[![python versions](https://img.shields.io/pypi/pyversions/tukio.svg)](https://pypi.python.org/pypi/tukio/)
+
 Tukio is an event based workflow generator library built around [asyncio](https://docs.python.org/3/library/asyncio.html).
 
 ## Concepts
