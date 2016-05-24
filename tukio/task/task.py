@@ -53,8 +53,8 @@ class TaskRegistry:
     def get(cls, task_name):
         try:
             return cls._registry[task_name]
-        except KeyError as ke:
-            raise UnknownTaskName(ke)
+        except KeyError as exc:
+            raise UnknownTaskName(exc)
 
     @classmethod
     def all(cls):

@@ -13,9 +13,10 @@ class TaskTemplate:
     `asyncio.Task`) and provide execution report.
     """
 
-    def __init__(self, name, config=None, uid=None):
+    def __init__(self, name, uid=None, config=None, topics=[]):
         self.name = name
         self.config = config
+        self.topics = topics
         self.uid = uid or str(uuid4())
         # store an execution object (instance of `asyncio.Task`)
         self._task = None
@@ -48,13 +49,28 @@ class TaskTemplate:
             {
                 "id": <task-template-id>,
                 "name": <registered-task-name>,
-                "config": <config-dict>
+                "config": <config-dict>,
+                "topics": {[<>]|null}
             }
+
+        The parameters 'topics' and 'config' are both optional.
+        See below the behavior of a task at runtime according to the values of
+        'topics':
+            {"topics": None}
+            the task will receive ALL data disptached by the broker
+
+            {"topics": []}
+            the task will receive NO data from the broker
+
+            {"topics": ["blob", "foo"]}
+            the task will receive data dispatched by the broker in topics
+            "blob" and "foo" only
         """
         uid = task_dict.get('id')
         name = task_dict['name']
         config = task_dict.get('config')
-        return cls(name, config=config, uid=uid)
+        topics = task_dict.get('topics', [])
+        return cls(name, uid=uid, config=config, topics=topics)
 
     def as_dict(self):
         """
@@ -62,7 +78,8 @@ class TaskTemplate:
         task template is linked to a task execution object, the dictionary
         contains the execution (stored at key 'exec').
         """
-        task_dict = {"name": self.name, "id": self.uid, "config": self.config}
+        task_dict = {"name": self.name, "id": self.uid}
+        task_dict.update({"config": self.config, "topics": self.topics})
         exec_dict = self._report()
         if exec_dict:
             task_dict['exec'] = exec_dict

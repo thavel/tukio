@@ -294,7 +294,7 @@ class Workflow(asyncio.Future):
     way of workflow execution.
     """
 
-    def __init__(self, wf_tmpl, *, loop=None):
+    def __init__(self, wf_tmpl, *, loop=None, broker=None):
         super().__init__(loop=loop)
         self.uid = str(uuid4())
         # Always act on a copy of the original workflow template
@@ -304,13 +304,15 @@ class Workflow(asyncio.Future):
         # List of tasks executed at some point
         self.tasks = set()
         self._done_tasks = set()
-        self._new_task_exc = None
+        self._internal_exc = None
         self._must_cancel = False
         self.lock = asyncio.Lock()
         # Create the workflow in the 'locked' state when its overrun policy is
         # 'skip-until-unlock'.
         if self.policy is OverrunPolicy.skip_until_unlock:
             self.lock._locked = True
+        # Optionally work with an event broker
+        self._broker = broker
 
     @property
     def template_id(self):
@@ -329,6 +331,48 @@ class Workflow(asyncio.Future):
         """
         if self.lock.locked():
             self.lock.release()
+
+    def _register_to_broker(self, task_tmpl):
+        """
+        Registers the `data_received` callback of the task (if defined) into
+        the event broker to handle new data received during task execution.
+        """
+        if self._broker:
+            # First get what to do from the task's topics. An empty list means
+            # the task must not receive data during its execution.
+            topics = task_tmpl.topics
+            if topics == []:
+                return
+
+            # Since the task is configured to receive data during its execution
+            # it MUST be possible to register a callback.
+            try:
+                task = task_tmpl.task
+                callback = task.holder.data_received
+            except AttributeError as exc:
+                log.error("no callback to register in broker (%s)", exc)
+                raise
+            if topics is not None:
+                for topic in topics:
+                    self._broker.register(callback, topic=topic)
+            else:
+                self._broker.register(callback)
+
+            # Unregister this callback as soon as the task will be done.
+            done_cb = functools.partial(self._unregister_from_broker, callback)
+            task.add_done_callback(done_cb)
+
+    def _unregister_from_broker(self, callback, _):
+        """
+        A very simple wrapper around `Broker.unregister()` to ignore the future
+        object passed as argument by asyncio to all done callbacks.
+        """
+        try:
+            self._broker.unregister(callback)
+        except Exception as exc:
+            log.error('failed to unregister callback: %s', exc)
+            self._internal_exc = exc
+            self._cancel_all_tasks()
 
     def run(self, *args, **kwargs):
         """
@@ -353,14 +397,16 @@ class Workflow(asyncio.Future):
         try:
             args, kwargs = inputs
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
+            # Register the `data_received` callback (if required) as soon as
+            # the execution of the task is scheduled.
+            self._register_broker(task_impl)
         except Exception as exc:
-            warn = 'failed to create task {}: raised {}'
-            log.warning(warn.format(task_tmpl, exc))
-            self._new_task_exc = exc
+            log.error('failed to create task %s: raised %s', task_tmpl, exc)
+            self._internal_exc = exc
             self._cancel_all_tasks()
             return None
         else:
-            log.debug('new task created for {}'.format(task_tmpl))
+            log.debug('new task created for %s', task_tmpl)
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
             self.tasks.add(task)
@@ -381,7 +427,8 @@ class Workflow(asyncio.Future):
         try:
             result = future.result()
         except Exception as exc:
-            log.warning('task {} ended on {}'.format(task_tmpl, exc))
+            log.warning('task %s ended on exception', task_tmpl)
+            log.exception(exc)
         else:
             succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
@@ -402,8 +449,8 @@ class Workflow(asyncio.Future):
         # done callback from another task executed in the same iteration of the
         # event loop.
         if self._all_tasks_done() and not self.done():
-            if self._new_task_exc:
-                self.set_exception(self._new_task_exc)
+            if self._internal_exc:
+                self.set_exception(self._internal_exc)
             elif self._must_cancel:
                 super().cancel()
             else:
