@@ -128,7 +128,7 @@ class OverrunPolicyHandler:
         return self._new_wflow()
 
 
-class WorkflowTemplate(object):
+class WorkflowTemplate:
 
     """
     A workflow template is a DAG (Directed Acyclic Graph) made up of task
@@ -285,6 +285,13 @@ class WorkflowTemplate(object):
         for task in self.tasks:
             TaskRegistry.get(task.name)
         return True
+
+    def __str__(self):
+        """
+        Human readable string representation of a workflow template.
+        """
+        wfstr = "<WorkflowTemplate title={}, uid={}, version={}>"
+        return wfstr.format(self.title, self.uid, self.version)
 
 
 class Workflow(asyncio.Future):

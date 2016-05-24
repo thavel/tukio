@@ -13,8 +13,15 @@ from tukio.task import tukio_factory
 log = logging.getLogger(__name__)
 
 
-class DuplicateWorkflowError(Exception):
-    pass
+class WorkflowVersionError(Exception):
+    def __init__(self, new_tmpl, current_tmpl):
+        super().__init__()
+        self.new = new_tmpl
+        self.current = current_tmpl
+
+    def __str__(self):
+        err = 'cannot load {}, it is not newer than {}'
+        return err.format(self.new, self.current)
 
 
 class Engine(asyncio.Future):
@@ -97,11 +104,7 @@ class Engine(asyncio.Future):
             self._templates[template.uid] = template
         else:
             if duplicate.version >= template.version:
-                raise DuplicateWorkflowError(
-                    'Current version {} has not been incremented (old was {}).'.format(
-                        template.version, duplicate.version
-                    )
-                )
+                raise WorkflowVersionError(template, duplicate)
             else:
                 self._templates[template.uid] = template
         log.debug("new workflow template added '{}'".format(template.title))
@@ -163,7 +166,8 @@ class Engine(asyncio.Future):
         except KeyError:
             # the workflow template is no longer loaded in the engine; nothing
             # to run!
-            log.debug("Workflow template id {} not found. Will not be run.".format(tmpl_id))
+            log.debug("Workflow template id %s not found. "
+                      "Won't be run.", tmpl_id)
             return
         # Always apply the policy of the current workflow template (workflow
         # instances may run with an old version of the template)
@@ -178,9 +182,8 @@ class Engine(asyncio.Future):
                 wflow.run(data)
             self._add_wflow(wflow)
         else:
-            log.debug(
-                "Workflow from template {} not ran according to template policy.".format(tmpl_id)
-            )
+            log.debug("Workflow from template id %s not ran according to "
+                      "its overrun policy.", tmpl_id)
 
     async def _wait_abort(self, running, callback):
         """
@@ -196,7 +199,8 @@ class Engine(asyncio.Future):
         regardless of the overrun policy and already running workflows.
         """
         if self._must_stop:
-            log.debug("Currently stopping, Workflow from template {} not planned".format(tmpl_id))
+            log.debug("The engine is stopping, cannot run a new workflow from"
+                      "template id %s", tmpl_id)
             return None
         wf_tmpl = self._templates[tmpl_id]
         wflow = new_workflow(wf_tmpl, loop=self._loop)
