@@ -96,7 +96,7 @@ class Engine(asyncio.Future):
         except KeyError:
             self._templates[template.uid] = template
         else:
-            if duplicate.version <= template.version:
+            if duplicate.version >= template.version:
                 raise DuplicateWorkflowError(
                     'Current version {} has not been incremented (old was {}).'.format(
                         template.version, duplicate.version
