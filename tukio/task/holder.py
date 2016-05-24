@@ -46,6 +46,12 @@ class TaskHolder:
         self.config = config
         self.uid = str(uuid4())
 
+    def data_received(self, data):
+        """
+        This callback is executed if the broker must pass a new event to the
+        task. Override this method to handle data as expected by the task.
+        """
+
     def report(self):
         """
         Returns an execution report (a dict). When defined, this method is used

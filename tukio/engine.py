@@ -5,7 +5,7 @@ import asyncio
 import weakref
 import logging
 
-from tukio.workflow import WorkflowTemplate, OverrunPolicy, new_workflow
+from tukio.workflow import OverrunPolicy, new_workflow
 from tukio.broker import get_broker
 from tukio.task import tukio_factory
 

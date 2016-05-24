@@ -213,8 +213,9 @@ class WorkflowTemplate(object):
             {
                 "title": <workflow-title>,
                 "id": <workflow-uid>,
-                "vesion": <version>,
+                "version": <version>,
                 "tags": [<a-tag>, <another-tag>],
+                "topics": [<a-topic>, <another-topic>],
                 "tasks": [
                     {"id": <task-uid>, "name": <name>, "config": <cfg-dict>},
                     ...
@@ -225,6 +226,8 @@ class WorkflowTemplate(object):
                     ...
                 }
             }
+
+        Only 'title' is mandatory to create a workflow template.
         """
         # 'title' is the only mandatory key
         title, uid = wf_dict['title'], wf_dict.get('id')
