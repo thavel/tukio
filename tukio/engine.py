@@ -27,43 +27,69 @@ class LoadWorkflowError(Exception):
 class _WorkflowSelector:
 
     """
-    This class stores the topics workflow templates are associated with. Thanks
-    to this association, it can provide a list of 'trigger-able' workflow
-    templates from a given topic.
+    This class stores all the workflow templates loaded in the workflow engine
+    and the association template ID/topics. Thanks to this association, it can
+    provide a list of 'trigger-able' workflow templates from a given topic or
+    return the right template from a given template ID.
     This object is used from within the workflow engine and is not meant to be
     used by others modules.
     """
 
-    def __init__(self, engine):
+    def __init__(self):
         self._topics = {None: set()}
-        self._engine = engine
+        self._templates = dict()
 
-    def load(self, wf_tmpl):
+    def load(self, template):
         """
-        Loads a new workflow template in the selector.
+        Loads a new workflow template in the selector. If a previous version
+        of this template was loaded, unload it first.
         """
-        topics = wf_tmpl.topics
+        # A workflow template is uniquely defined by the tuple
+        # (template ID, version)
+        try:
+            current = self._templates[template.uid]
+        except KeyError:
+            self._templates[template.uid] = template
+            current = None
+        else:
+            if current.version >= template.version:
+                raise LoadWorkflowError(template, current)
+            else:
+                self._templates[template.uid] = template
+
+        # Update the template ID/topics association
+        if current is not None:
+            self.unload(current)
+        topics = template.topics
         if topics is not None:
             for topic in topics:
                 try:
-                    self._topics[topic].add(wf_tmpl)
+                    self._topics[topic].add(template)
                 except KeyError:
-                    self._topics[topic] = {wf_tmpl}
+                    self._topics[topic] = {template}
         else:
-            self._topics[None].add(wf_tmpl)
+            self._topics[None].add(template)
 
-    def unload(self, wf_tmpl):
+    def unload(self, tmpl_id):
         """
         Unloads a workflow template from the selector.
         """
-        topics = wf_tmpl.topics
+        try:
+            template = self._templates.pop(tmpl_id)
+        except KeyError:
+            # Nothing to unload
+            return None
+
+        # Update the template ID/topics association
+        topics = template.topics
         if topics is not None:
             for topic in topics:
-                self._topics[topic].discard(wf_tmpl)
+                self._topics[topic].discard(template)
                 if not self._topics[topic]:
                     del self._topics[topic]
         else:
-            self._topics[None].discard(wf_tmpl)
+            self._topics[None].discard(template)
+        return template
 
     def clear(self):
         """
@@ -71,6 +97,7 @@ class _WorkflowSelector:
         a call to `get()` right after this operation will always return an
         empty list.
         """
+        self._templates.clear()
         self._topics.clear()
         self._topics[None] = set()
 
@@ -110,7 +137,7 @@ class Engine(asyncio.Future):
         super().__init__(loop=loop)
         # use the custom asyncio task factory
         self._loop.set_task_factory(tukio_factory)
-        self._templates = dict()
+        self._selector = _WorkflowSelector()
         self._running = dict()
         self._broker = get_broker(self._loop)
         self._lock = asyncio.Lock()
@@ -119,7 +146,10 @@ class Engine(asyncio.Future):
 
     @property
     def templates(self):
-        return self._templates
+        """
+        Returns the dict of loaded workflow templates.
+        """
+        return self._selector._templates
 
     def _add_wflow(self, wflow):
         """
@@ -176,18 +206,7 @@ class Engine(asyncio.Future):
         This operation does not affect workflow executions in progress.
         """
         template.validate()
-        # A workflow template is uniquely defined by the tuple
-        # (template ID, version)
-        duplicate = None
-        try:
-            duplicate = self._templates[template.uid]
-        except KeyError:
-            self._templates[template.uid] = template
-        else:
-            if duplicate.version >= template.version:
-                raise LoadWorkflowError(template, duplicate)
-            else:
-                self._templates[template.uid] = template
+        self._selector.load(template)
         log.debug("new workflow template loaded: %s", template)
 
     async def load(self, template):
@@ -204,7 +223,7 @@ class Engine(asyncio.Future):
         This operation does not affect workflow executions in progress.
         """
         with await self._lock:
-            self._templates = dict()
+            self._selector.clear()
             for tmpl in templates:
                 await self._run_in_task(self._load, tmpl)
 
@@ -214,10 +233,7 @@ class Engine(asyncio.Future):
         template was found and actually unloaded, else, returns False.
         """
         with await self._lock:
-            try:
-                template = self._templates.pop(template_id)
-            except KeyError:
-                return None
+            template = self._selector.unload(template_id)
         return template
 
     async def data_received(self, data, topic=None):
@@ -231,31 +247,24 @@ class Engine(asyncio.Future):
         if self._must_stop:
             return
         with await self._lock:
+            templates = self._selector.get(topic)
             # Try to trigger new workflows from the current dict of workflow
             # templates at all times!
-            for tmpl_id in self._templates:
-                await self._run_in_task(self._try_run, tmpl_id, data)
+            for tmpl in templates:
+                await self._run_in_task(self._try_run, tmpl, data)
 
-    def _try_run(self, tmpl_id, data):
+    def _try_run(self, template, data):
         """
         Try to run a new instance of workflow defined by `tmpl_id` according to
         the instances already running and the overrun policy.
         """
-        running = self._running.get(tmpl_id)
-        try:
-            wf_tmpl = self._templates[tmpl_id]
-        except KeyError:
-            # the workflow template is no longer loaded in the engine; nothing
-            # to run!
-            log.debug("Workflow template id %s not found. "
-                      "Won't be run.", tmpl_id)
-            return
+        running = self._running.get(template.uid)
         # Always apply the policy of the current workflow template (workflow
         # instances may run with an old version of the template)
-        wflow = new_workflow(wf_tmpl, running=running, loop=self._loop)
+        wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
             wflow.add_done_callback(self._remove_wflow)
-            if wf_tmpl.policy == OverrunPolicy.abort_running and running:
+            if template.policy == OverrunPolicy.abort_running and running:
                 def cb():
                     wflow.run(data)
                 asyncio.ensure_future(self._wait_abort(running, cb))
@@ -264,7 +273,7 @@ class Engine(asyncio.Future):
             self._add_wflow(wflow)
         else:
             log.debug("Workflow from template id %s not ran according to "
-                      "its overrun policy.", tmpl_id)
+                      "its overrun policy.", template.uid)
 
     async def _wait_abort(self, running, callback):
         """
@@ -283,7 +292,7 @@ class Engine(asyncio.Future):
             log.debug("The engine is stopping, cannot run a new workflow from"
                       "template id %s", tmpl_id)
             return None
-        wf_tmpl = self._templates[tmpl_id]
+        wf_tmpl = self.templates[tmpl_id]
         wflow = new_workflow(wf_tmpl, loop=self._loop)
         wflow.add_done_callback(self._remove_wflow)
         wflow.run(inputs)
