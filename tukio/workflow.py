@@ -137,18 +137,19 @@ class WorkflowTemplate:
     It provides an API to easily build and update a consistent workflow.
     """
 
-    def __init__(self, title, uid=None, tags=None, version=None, policy=None):
+    def __init__(self, title, uid=None, tags=None, version=None, policy=None,
+                 topics=None):
         self.title = title
         self.tags = tags or []
         self.uid = uid or str(uuid4())
         self.version = int(version) if version is not None else 1
+        self.topics = topics
         if policy is None:
             self.policy = OverrunPolicy.get_default_policy()
         elif isinstance(policy, OverrunPolicy):
             self.policy = policy
         else:
             self.policy = OverrunPolicy(policy)
-
         self.dag = DAG()
 
     @property
@@ -216,6 +217,7 @@ class WorkflowTemplate:
                 "version": <version>,
                 "tags": [<a-tag>, <another-tag>],
                 "topics": [<a-topic>, <another-topic>],
+                "policy": <policy>,
                 "tasks": [
                     {"id": <task-uid>, "name": <name>, "config": <cfg-dict>},
                     ...
@@ -228,13 +230,24 @@ class WorkflowTemplate:
             }
 
         Only 'title' is mandatory to create a workflow template.
+        See below the conditions applied to trigger a workflow according to the
+        value of 'topics':
+            {"topics": None}
+            try to trigger a workflow each time data is received by the engine
+
+            {"topics": []}
+            never try to trigger a workflow when data is received by the engine
+
+            {"topics": ["blob", "foo"]}
+            try to trigger a workflow when data is received by the engine in
+            topics "blob" and "foo" only
         """
         # 'title' is the only mandatory key
         title, uid = wf_dict['title'], wf_dict.get('id')
         tags, version = wf_dict.get('tags'), wf_dict.get('version')
-        policy = wf_dict.get('policy')
-        wf_tmpl = cls(title, uid=uid, tags=tags,
-                      version=version, policy=policy)
+        policy, topics = wf_dict.get('policy'), wf_dict.get('topics')
+        wf_tmpl = cls(title, uid=uid, tags=tags, version=version,
+                      policy=policy, topics=topics)
         task_ids = dict()
         for task_dict in wf_dict.get('tasks', []):
             task_tmpl = TaskTemplate.from_dict(task_dict)
@@ -253,9 +266,9 @@ class WorkflowTemplate:
         template object.
         """
         wf_dict = {
-            "title": self.title, "id": self.uid,
-            "tags": self.tags, "version": int(self.version),
-            "tasks": [], "graph": {}
+            "title": self.title, "id": self.uid, "tags": self.tags,
+            "version": int(self.version), "policy": self.policy.value,
+            "topics": self.topics, "tasks": [], "graph": {}
         }
         for task_tmpl in self.tasks:
             wf_dict['tasks'].append(task_tmpl.as_dict())
@@ -349,6 +362,7 @@ class Workflow(asyncio.Future):
             # the task must not receive data during its execution.
             topics = task_tmpl.topics
             if topics == []:
+                # an empty list means don't receive data during execution
                 return
 
             # Since the task is configured to receive data during its execution

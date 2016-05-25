@@ -13,7 +13,7 @@ from tukio.task import tukio_factory
 log = logging.getLogger(__name__)
 
 
-class WorkflowVersionError(Exception):
+class LoadWorkflowError(Exception):
     def __init__(self, new_tmpl, current_tmpl):
         super().__init__()
         self.new = new_tmpl
@@ -24,7 +24,88 @@ class WorkflowVersionError(Exception):
         return err.format(self.new, self.current)
 
 
+class _WorkflowSelector:
+
+    """
+    This class stores the topics workflow templates are associated with. Thanks
+    to this association, it can provide a list of 'trigger-able' workflow
+    templates from a given topic.
+    This object is used from within the workflow engine and is not meant to be
+    used by others modules.
+    """
+
+    def __init__(self, engine):
+        self._topics = {None: set()}
+        self._engine = engine
+
+    def load(self, wf_tmpl):
+        """
+        Loads a new workflow template in the selector.
+        """
+        topics = wf_tmpl.topics
+        if topics is not None:
+            for topic in topics:
+                try:
+                    self._topics[topic].add(wf_tmpl)
+                except KeyError:
+                    self._topics[topic] = {wf_tmpl}
+        else:
+            self._topics[None].add(wf_tmpl)
+
+    def unload(self, wf_tmpl):
+        """
+        Unloads a workflow template from the selector.
+        """
+        topics = wf_tmpl.topics
+        if topics is not None:
+            for topic in topics:
+                self._topics[topic].discard(wf_tmpl)
+                if not self._topics[topic]:
+                    del self._topics[topic]
+        else:
+            self._topics[None].discard(wf_tmpl)
+
+    def clear(self):
+        """
+        Removes all workflow templates loaded in the selector. As a consequence
+        a call to `get()` right after this operation will always return an
+        empty list.
+        """
+        self._topics.clear()
+        self._topics[None] = set()
+
+    def get(self, topic=None):
+        """
+        Returns the list of workflow templates that can be triggered by new
+        data received in the given topic.
+        Remember that topic=None means all workflow templates that can be
+        triggered whatever the topic (including no topic).
+        """
+        # Always include the set of global workflow templates (trigger-able in
+        # any case)
+        global_tmpls = self._topics[None]
+        if topic is not None:
+            try:
+                topic_tmpls = self._topics[topic]
+            except KeyError:
+                topic_tmpls = set()
+            return list(global_tmpls | topic_tmpls)
+        return list(global_tmpls)
+
+
 class Engine(asyncio.Future):
+
+    """
+    The Tukio workflow engine. Basically, it can load or unload workflow
+    templates and trigger new executions of workflows upon receiving new data.
+    The `run()` method allows to select and trigger a particular workflow.
+    Workflow executions can be cancelled as per their execution ID (`cancel()`)
+    or all at once (`cancel_all()`).
+    It is an awaitable object (inherits from `asyncio.Future`) which will be
+    marked as done after its `stop()` method has been called and all the
+    running workflows are done. Afterwards no new workflow can be triggered.
+    """
+
     def __init__(self, *, loop=None):
         super().__init__(loop=loop)
         # use the custom asyncio task factory
@@ -104,10 +185,10 @@ class Engine(asyncio.Future):
             self._templates[template.uid] = template
         else:
             if duplicate.version >= template.version:
-                raise WorkflowVersionError(template, duplicate)
+                raise LoadWorkflowError(template, duplicate)
             else:
                 self._templates[template.uid] = template
-        log.debug("new workflow template added '{}'".format(template.title))
+        log.debug("new workflow template loaded: %s", template)
 
     async def load(self, template):
         """
@@ -139,13 +220,13 @@ class Engine(asyncio.Future):
                 return None
         return template
 
-    async def data_received(self, data):
+    async def data_received(self, data, topic=None):
         """
         This method should be called to pass an event to the workflow engine
         which in turn will disptach this event to the right running workflows
         and may trigger new workflow executions.
         """
-        self._broker.dispatch(data)
+        self._broker.dispatch(data, topic)
         # Don't start new workflow instances if `stop()` was called.
         if self._must_stop:
             return

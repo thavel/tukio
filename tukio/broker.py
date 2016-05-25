@@ -50,29 +50,6 @@ class Broker(object):
         self._handlers = dict()
         self._topics = dict()
 
-    def add_topic(self, topic):
-        """
-        Adds a new topic to register handlers with.
-        """
-        if topic in self._topics:
-            return
-        self._topics[topic] = set()
-
-    def del_topic(self, topic):
-        """
-        Deletes an existing topic. Raises `BrokerDeleteTopicError` if handlers
-        are still registered with that topic of if the topic doesn't exist.
-        """
-        try:
-            handlers = self._topics[topic]
-        except KeyError:
-            raise BrokerDeleteTopicError("topic {} doesn't "
-                                         "exist".format(topic))
-        if handlers:
-            raise BrokerDeleteTopicError("handlers still registered "
-                                         "with {}".format(topic))
-        del self._topics[topic]
-
     def dispatch(self, data, topic=None):
         """
         Passes an event (aka the data) received to each registered handler.
@@ -113,8 +90,12 @@ class Broker(object):
             if curr_topics == set():
                 raise ValueError('{} already registered as global'
                                  ' handler'.format(coro_or_cb))
-            # Topics must have been added prior to registering handlers
-            self._topics[topic].add(coro_or_cb)
+            # Update or add topic's registration
+            try:
+                self._topics[topic].add(coro_or_cb)
+            except KeyError:
+                self._topics[topic] = {coro_or_cb}
+            # Update or add handler's registration
             try:
                 self._handlers[coro_or_cb].add(topic)
             except KeyError:
@@ -125,21 +106,49 @@ class Broker(object):
                                  ' topics {}'.format(coro_or_cb, curr_topics))
             self._handlers[coro_or_cb] = set()
 
+    def _discard_topic(self, coro_or_cb, topic):
+        """
+        Try to cleanup the dict of handlers and topics.
+        """
+        self._topics[topic].discard(coro_or_cb)
+        if not self._topics[topic]:
+            del self._topics[topic]
+
     def unregister(self, coro_or_cb, topic=None):
         """
         Unregisters a per-topic or a global handler. If topic is None, all
         registrations (even per-topic) of that handler will be removed.
+        This is a fault-tolerant implementation so as to ensure the runtime
+        context of the broker will remain clean at all times.
         """
+        ke_exc = None
         if topic is not None:
-            self._topics[topic].remove(coro_or_cb)
-            self._handlers[coro_or_cb].remove(topic)
-            if not self._handlers[coro_or_cb]:
-                del self._handlers[coro_or_cb]
+            # Try to cleanup the dict of topics first
+            try:
+                self._discard_topic(coro_or_cb, topic)
+            except KeyError as exc:
+                ke_exc = exc
+            finally:
+                # Try to cleanup the dict of handlers anyway
+                try:
+                    self._handlers[coro_or_cb].discard(topic)
+                    if not self._handlers[coro_or_cb]:
+                        del self._handlers[coro_or_cb]
+                except KeyError as exc:
+                    # explicitely chain exceptions
+                    raise exc from ke_exc
         else:
+            # No further cleanup to perform if a KeyError is raised here
             curr_topics = self._handlers[coro_or_cb]
             for ct in curr_topics:
-                self._topics[ct].remove(coro_or_cb)
+                try:
+                    self._discard_topic(coro_or_cb, ct)
+                except KeyError as exc:
+                    ke_exc = exc
             del self._handlers[coro_or_cb]
+        # Re-raise the KeyError exception if something went wrong
+        if ke_exc is not None:
+            raise ke_exc
 
 
 def get_broker(loop=None):

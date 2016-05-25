@@ -54,7 +54,7 @@ class TaskTemplate:
             }
 
         The parameters 'topics' and 'config' are both optional.
-        See below the behavior of a task at runtime according to the values of
+        See below the behavior of a task at runtime according to the value of
         'topics':
             {"topics": None}
             the task will receive ALL data disptached by the broker
