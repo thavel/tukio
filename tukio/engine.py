@@ -250,8 +250,12 @@ class Engine(asyncio.Future):
             templates = self._selector.get(topic)
             # Try to trigger new workflows from the current dict of workflow
             # templates at all times!
+            wflows = []
             for tmpl in templates:
-                await self._run_in_task(self._try_run, tmpl, data)
+                wflow = await self._run_in_task(self._try_run, tmpl, data)
+                if wflow:
+                    wflows.append(wflow)
+        return wflows
 
     def _try_run(self, template, data):
         """
