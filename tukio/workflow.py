@@ -420,7 +420,7 @@ class Workflow(asyncio.Future):
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
-            self._register_broker(task_impl)
+            self._register_to_broker(task_tmpl)
         except Exception as exc:
             log.error('failed to create task %s: raised %s', task_tmpl, exc)
             self._internal_exc = exc

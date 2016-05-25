@@ -161,7 +161,7 @@ class Engine(asyncio.Future):
         except KeyError:
             self._running[wflow.template_id] = [wflow]
         self._running_by_id[wflow.uid] = wflow
-        log.debug('new workflow added to the running list: {}'.format(wflow))
+        log.debug('new workflow started %s', wflow)
 
     def _remove_wflow(self, wflow):
         """
@@ -263,6 +263,7 @@ class Engine(asyncio.Future):
         # instances may run with an old version of the template)
         wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
+            self._add_wflow(wflow)
             wflow.add_done_callback(self._remove_wflow)
             if template.policy == OverrunPolicy.abort_running and running:
                 def cb():
@@ -270,10 +271,8 @@ class Engine(asyncio.Future):
                 asyncio.ensure_future(self._wait_abort(running, cb))
             else:
                 wflow.run(data)
-            self._add_wflow(wflow)
         else:
-            log.debug("Workflow from template id %s not ran according to "
-                      "its overrun policy.", template.uid)
+            log.debug("skip new workflow from %s (overrun policy)", template)
 
     async def _wait_abort(self, running, callback):
         """
@@ -294,9 +293,9 @@ class Engine(asyncio.Future):
             return None
         wf_tmpl = self.templates[tmpl_id]
         wflow = new_workflow(wf_tmpl, loop=self._loop)
+        self._add_wflow(wflow)
         wflow.add_done_callback(self._remove_wflow)
         wflow.run(inputs)
-        self._add_wflow(wflow)
         return wflow
 
     def cancel(self, exec_id):
