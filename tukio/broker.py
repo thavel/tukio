@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 
 
@@ -36,9 +35,11 @@ class Broker(object):
     The workflow engine has a global event broker that gathers external events
     (e.g. from the network) and internal events (e.g. from tasks) and schedules
     the execution of registered handlers.
+    A handler can be registerd as global (receives all events) or per-topic
+    (receives events only from its registered topics).
     If an event is disptached with a topic, all handlers registered with that
-    topic will be executed. Else, all handers (whatever the topic) will be
-    executed.
+    topic will be executed as well as all global handlers. Else, only global
+    handlers will be executed.
 
     Note: this class is not thread-safe. Its methods must be called from within
     the same thread as the thread running the event loop used by the workflow
@@ -48,23 +49,27 @@ class Broker(object):
     def __init__(self, loop=None):
         self._loop = loop or asyncio.get_event_loop()
         self._handlers = dict()
-        self._topics = dict()
+        self._topics = {None: set()}
 
     def dispatch(self, data, topic=None):
         """
-        Passes an event (aka the data) received to each registered handler.
+        Passes an event (aka the data) received to the right handlers.
         If topic is not None, the event is dispatched to handlers registered
-        to that topic only. Else it is dispatched to all handlers.
+        to that topic only + global handlers. Else it is dispatched to global
+        handlers only.
         Even if a handler was registered multiple times in multiple topics, it
         will be executed only once per call to `dispatch()`.
         """
+        # Always include the set of global handlers (they receive all events)
+        global_handlers = self._topics[None]
         if topic is not None:
             try:
                 handlers = self._topics[topic]
             except KeyError:
                 handlers = set()
+            handlers = handlers | global_handlers
         else:
-            handlers = self._handlers
+            handlers = global_handlers
         for handler in handlers:
             if asyncio.iscoroutinefunction(handler):
                 asyncio.ensure_future(handler(data), loop=self._loop)
@@ -73,17 +78,17 @@ class Broker(object):
 
     def register(self, coro_or_cb, topic=None):
         """
-        Registers a handler (i.e. a coroutine or a regular function) to be
-        executed upon receiving new events.
+        Registers a handler (i.e. a coroutine or a regular function/method) to
+        be executed upon receiving new events.
         If topic is not None, the handler will receive all events dispatched in
         that topic only. Else it will receive all events dispatched by the
-        broker.
+        broker (whatever the topic including None).
         A handler can be registered multiple times in different topics. But a
         handler can neither be registered as global when already per-topic nor
-        per-topic when already global.
+        registered as per-topic when already global.
         """
-        if not inspect.isfunction(coro_or_cb):
-            raise TypeError('{} is not a function'.format(coro_or_cb))
+        if not callable(coro_or_cb):
+            raise TypeError('{} is not a callable object'.format(coro_or_cb))
         # Handler already registered with topics?
         curr_topics = self._handlers.get(coro_or_cb)
         if topic is not None:
@@ -104,22 +109,25 @@ class Broker(object):
             if curr_topics:
                 raise ValueError('{} already registered with'
                                  ' topics {}'.format(coro_or_cb, curr_topics))
-            self._handlers[coro_or_cb] = set()
+            self._handlers[coro_or_cb] = set([None])
+            self._topics[None].add(coro_or_cb)
 
     def _discard_topic(self, coro_or_cb, topic):
         """
         Try to cleanup the dict of handlers and topics.
         """
         self._topics[topic].discard(coro_or_cb)
-        if not self._topics[topic]:
+        if topic is not None and not self._topics[topic]:
             del self._topics[topic]
 
     def unregister(self, coro_or_cb, topic=None):
         """
         Unregisters a per-topic or a global handler. If topic is None, all
-        registrations (even per-topic) of that handler will be removed.
+        registrations (global or per-topic) of that handler will be removed.
+
         This is a fault-tolerant implementation so as to ensure the runtime
-        context of the broker will remain clean at all times.
+        context of the broker will remain clean at all times. It re-raises
+        KeyError exceptions after context cleanup.
         """
         ke_exc = None
         if topic is not None:

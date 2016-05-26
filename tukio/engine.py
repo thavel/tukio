@@ -242,6 +242,7 @@ class Engine(asyncio.Future):
         which in turn will disptach this event to the right running workflows
         and may trigger new workflow executions.
         """
+        log.debug("data received '%s' in topic '%s'", data, topic)
         self._broker.dispatch(data, topic)
         # Don't start new workflow instances if `stop()` was called.
         if self._must_stop:
@@ -277,6 +278,7 @@ class Engine(asyncio.Future):
                 wflow.run(data)
         else:
             log.debug("skip new workflow from %s (overrun policy)", template)
+        return wflow
 
     async def _wait_abort(self, running, callback):
         """

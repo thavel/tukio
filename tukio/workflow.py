@@ -9,6 +9,7 @@ from uuid import uuid4
 from tukio.dag import DAG, DAGValidationError
 from tukio.task import TaskTemplate, TaskRegistry
 from tukio.utils import future_state
+from tukio.broker import get_broker
 
 
 log = logging.getLogger(__name__)
@@ -331,8 +332,8 @@ class Workflow(asyncio.Future):
         # 'skip-until-unlock'.
         if self.policy is OverrunPolicy.skip_until_unlock:
             self.lock._locked = True
-        # Optionally work with an event broker
-        self._broker = broker
+        # Work with an event broker
+        self._broker = broker or get_broker(self._loop)
 
     @property
     def template_id(self):
