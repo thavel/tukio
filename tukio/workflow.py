@@ -6,7 +6,7 @@ import inspect
 import logging
 from uuid import uuid4
 
-from tukio.dag import DAG
+from tukio.dag import DAG, DAGValidationError
 from tukio.task import TaskTemplate, TaskRegistry
 from tukio.utils import future_state
 
@@ -177,12 +177,18 @@ class WorkflowTemplate(object):
         Returns the root task. If no root task or several root tasks were found
         raises `WorkflowValidationError`.
         """
-        root_task = self.dag.root_nodes()
+        try:
+            root_task = self.dag.root_nodes()
+        except DAGValidationError as exc:
+            log.error(exc)
+            raise WorkflowRootTaskError(exc) from exc
+
         if len(root_task) == 1:
             return root_task[0]
-        else:
-            raise WorkflowRootTaskError("expected one root task, "
-                                        "found {}".format(root_task))
+
+        raise WorkflowRootTaskError('expected one root task, found {}'.format(
+            root_task
+        ))
 
     def link(self, up_task_tmpl, down_task_tmpl):
         """
