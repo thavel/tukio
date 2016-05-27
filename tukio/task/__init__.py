@@ -1,3 +1,4 @@
+from .join import JoinTaskHolder
 from .task import TaskRegistry, UnknownTaskName, register, new_task
 from .factory import TukioTask, tukio_factory
 from .holder import TaskHolder
