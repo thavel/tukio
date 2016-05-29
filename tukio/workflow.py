@@ -375,25 +375,30 @@ class Workflow(asyncio.Future):
 
         # Register the callback in the event broker
         if listen is Listen.everything:
-            self._broker.register(callback, everything=True)
+            self._broker.register(callback)
         else:
             for topic in task_tmpl.topics:
                 self._broker.register(callback, topic=topic)
 
         # Unregister this callback as soon as the task will be done.
-        done_cb = functools.partial(self._unregister_from_broker, callback)
+        done_cb = functools.partial(self._unregister_from_broker, callback,
+                                    topics=task_tmpl.topics)
         task.add_done_callback(done_cb)
 
-    def _unregister_from_broker(self, callback, _):
+    def _unregister_from_broker(self, callback, _, topics=None):
         """
         A very simple wrapper around `Broker.unregister()` to ignore the future
         object passed as argument by asyncio to all done callbacks.
         """
-        try:
-            self._broker.unregister(callback)
-        except Exception as exc:
-            log.error('failed to unregister callback: %s', exc)
-            self._internal_exc = exc
+        if topics is None:
+            itertopics = [None]
+        for topic in itertopics:
+            try:
+                self._broker.unregister(callback, topic=topic)
+            except Exception as exc:
+                log.error('failed to unregister callback: %s', exc)
+                self._internal_exc = exc
+        if self._internal_exc:
             self._cancel_all_tasks()
 
     def run(self, *args, **kwargs):
