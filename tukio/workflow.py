@@ -6,9 +6,9 @@ import inspect
 import logging
 from uuid import uuid4
 
-from tukio.dag import DAG, DAGValidationError
+from tukio.dag import DAG
 from tukio.task import TaskTemplate, TaskRegistry
-from tukio.utils import future_state
+from tukio.utils import future_state, topics_to_listen, Listen
 from tukio.broker import get_broker
 
 
@@ -20,7 +20,11 @@ class WorkflowError(Exception):
 
 
 class WorkflowRootTaskError(WorkflowError):
-    pass
+    def __init__(self, value):
+        self._value = value
+
+    def __str__(self):
+        return 'expected one root task, found {}'.format(self._value)
 
 
 class WorkflowNotFoundError(WorkflowError):
@@ -157,6 +161,10 @@ class WorkflowTemplate:
     def tasks(self):
         return list(self.dag.graph.keys())
 
+    @property
+    def listen(self):
+        return topics_to_listen(self.topics)
+
     def add(self, task_tmpl):
         """
         Adds a new task template to the workflow. The task will remain orphan
@@ -179,18 +187,11 @@ class WorkflowTemplate:
         Returns the root task. If no root task or several root tasks were found
         raises `WorkflowValidationError`.
         """
-        try:
-            root_task = self.dag.root_nodes()
-        except DAGValidationError as exc:
-            log.error(exc)
-            raise WorkflowRootTaskError(exc) from exc
-
-        if len(root_task) == 1:
+        root_task = self.dag.root_nodes()
+        nb = len(root_task)
+        if nb == 1:
             return root_task[0]
-
-        raise WorkflowRootTaskError('expected one root task, found {}'.format(
-            root_task
-        ))
+        raise WorkflowRootTaskError(nb)
 
     def link(self, up_task_tmpl, down_task_tmpl):
         """
@@ -273,14 +274,14 @@ class WorkflowTemplate:
         }
         for task_tmpl in self.tasks:
             wf_dict['tasks'].append(task_tmpl.as_dict())
-        for up_tmpl, down_tmpls_set in self.dag.graph.items():
-            _record = {up_tmpl.uid: list(map(lambda x: x.uid, down_tmpls_set))}
-            wf_dict['graph'].update(_record)
+        for up_tmpl, down_tmpls in self.dag.graph.items():
+            entry = {up_tmpl.uid: list(map(lambda x: x.uid, down_tmpls))}
+            wf_dict['graph'].update(entry)
         return wf_dict
 
     def copy(self):
         """
-        Returns a new instance that is a copy of the current workflow template.
+        Returns a copy of the current instance of workflow template.
         """
         wf_tmpl = WorkflowTemplate(self.title, uid=self.uid,
                                    tags=self.tags, version=self.version)
@@ -318,12 +319,13 @@ class Workflow(asyncio.Future):
     def __init__(self, wf_tmpl, *, loop=None, broker=None):
         super().__init__(loop=loop)
         self.uid = str(uuid4())
-        # Always act on a copy of the original workflow template
-        self._wf_tmpl = wf_tmpl.copy()
+        self._template = wf_tmpl
         # Start and end datetime (UTC) of the execution of the workflow
         self._start, self._end = None, None
-        # List of tasks executed at some point
+        # Dict of tasks executed at some point. The values of that dict are
+        # instances of `asyncio.Task`, and keys are instances of `TaskTemplate`
         self.tasks = set()
+        self._tasks_by_id = dict()
         self._done_tasks = set()
         self._internal_exc = None
         self._must_cancel = False
@@ -337,11 +339,11 @@ class Workflow(asyncio.Future):
 
     @property
     def template_id(self):
-        return self._wf_tmpl.uid
+        return self._template.uid
 
     @property
     def policy(self):
-        return self._wf_tmpl.policy
+        return self._template.policy
 
     def _unlock(self, _):
         """
@@ -353,36 +355,34 @@ class Workflow(asyncio.Future):
         if self.lock.locked():
             self.lock.release()
 
-    def _register_to_broker(self, task_tmpl):
+    def _register_to_broker(self, task_tmpl, task):
         """
         Registers the `data_received` callback of the task (if defined) into
         the event broker to handle new data received during task execution.
         """
-        if self._broker:
-            # First get what to do from the task's topics. An empty list means
-            # the task must not receive data during its execution.
-            topics = task_tmpl.topics
-            if topics == []:
-                # an empty list means don't receive data during execution
-                return
+        listen = task_tmpl.listen
+        # Task is configured to receive no data during execution
+        if listen is Listen.nothing:
+            return
 
-            # Since the task is configured to receive data during its execution
-            # it MUST be possible to register a callback.
-            try:
-                task = task_tmpl.task
-                callback = task.holder.data_received
-            except AttributeError as exc:
-                log.error("no callback to register in broker (%s)", exc)
-                raise
-            if topics is not None:
-                for topic in topics:
-                    self._broker.register(callback, topic=topic)
-            else:
-                self._broker.register(callback)
+        # Since the task is configured to receive data during execution it MUST
+        # be possible to register a callback.
+        try:
+            callback = task.holder.data_received
+        except AttributeError as exc:
+            log.error("no callback to register in broker (%s)", exc)
+            raise
 
-            # Unregister this callback as soon as the task will be done.
-            done_cb = functools.partial(self._unregister_from_broker, callback)
-            task.add_done_callback(done_cb)
+        # Register the callback in the event broker
+        if listen is Listen.everything:
+            self._broker.register(callback, everything=True)
+        else:
+            for topic in task_tmpl.topics:
+                self._broker.register(callback, topic=topic)
+
+        # Unregister this callback as soon as the task will be done.
+        done_cb = functools.partial(self._unregister_from_broker, callback)
+        task.add_done_callback(done_cb)
 
     def _unregister_from_broker(self, callback, _):
         """
@@ -404,7 +404,7 @@ class Workflow(asyncio.Future):
         if self.tasks:
             return
         # Run the root task
-        root_tmpl = self._wf_tmpl.root()
+        root_tmpl = self._template.root()
         task = self._new_task(root_tmpl, (args, kwargs))
         self._start = datetime.utcnow()
         # The workflow may fail to start at once
@@ -421,7 +421,7 @@ class Workflow(asyncio.Future):
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
-            self._register_to_broker(task_tmpl)
+            self._register_to_broker(task_tmpl, task)
         except Exception as exc:
             log.error('failed to create task %s: raised %s', task_tmpl, exc)
             self._internal_exc = exc
@@ -432,6 +432,13 @@ class Workflow(asyncio.Future):
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
             self.tasks.add(task)
+            # Create the exec dict of the task
+            exec_dict = {'start': datetime.utcnow()}
+            try:
+                exec_dict['id'] = task.uid
+            except AttributeError:
+                exec_dict['id'] = None
+            self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
     def _run_next_tasks(self, task_tmpl, future):
@@ -452,7 +459,7 @@ class Workflow(asyncio.Future):
             log.warning('task %s ended on exception', task_tmpl)
             log.exception(exc)
         else:
-            succ_tmpls = self._wf_tmpl.dag.successors(task_tmpl)
+            succ_tmpls = self._template.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
                 inputs = ((result,), {})
                 succ_task = self._new_task(succ_tmpl, inputs)
@@ -520,7 +527,7 @@ class Workflow(asyncio.Future):
         """
         string = ("<Workflow template_id={}, template_title={}, uid={}, "
                   "start={}, end={}>")
-        tmpl_id, title = self.template_id, self._wf_tmpl.title
+        tmpl_id, title = self.template_id, self._template.title
         return string.format(tmpl_id, title, self.uid, self._start, self._end)
 
     def report(self):
@@ -530,8 +537,26 @@ class Workflow(asyncio.Future):
         """
         wf_exec = {"id": self.uid, "start": self._start, "end": self._end}
         wf_exec['state'] = future_state(self).value
-        report = self._wf_tmpl.as_dict()
+        report = self._template.as_dict()
         report['exec'] = wf_exec
+        # Update task descriptions to add info about their execution.
+        tasks_list = report['tasks']
+        for task_dict in tasks_list:
+            try:
+                task, exec_dict = self._tasks_by_id[task_dict['id']]
+            except KeyError:
+                task_dict.update({'exec': None})
+                continue
+            exec_dict['state'] = future_state(task).value
+            # If the task is linked to a task holder, try to use its own report
+            try:
+                task_report = task.holder.report()
+            except AttributeError:
+                pass
+            else:
+                if task_report is not None:
+                    exec_dict.update(task_report)
+            task_dict.update({'exec': exec_dict})
         return report
 
 

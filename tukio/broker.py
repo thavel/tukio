@@ -76,7 +76,7 @@ class Broker(object):
             else:
                 self._loop.call_soon(handler, data)
 
-    def register(self, coro_or_cb, topic=None):
+    def register(self, coro_or_cb, topic=None, everything=False):
         """
         Registers a handler (i.e. a coroutine or a regular function/method) to
         be executed upon receiving new events.

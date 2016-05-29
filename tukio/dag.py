@@ -110,8 +110,6 @@ class DAG(object):
         for nodes in self.graph.values():
             successors.update(nodes)
         root_nodes = list(all_nodes - successors)
-        if not root_nodes:
-            raise DAGValidationError('no root node found')
         return root_nodes
 
     def validate(self):

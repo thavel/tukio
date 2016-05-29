@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from .task import new_task
-from tukio.utils import future_state
+from tukio.utils import topics_to_listen
 
 
 class TaskTemplate:
@@ -18,28 +18,18 @@ class TaskTemplate:
         self.config = config
         self.topics = topics
         self.uid = uid or str(uuid4())
-        # store an execution object (instance of `asyncio.Task`)
-        self._task = None
 
     @property
-    def task(self):
-        return self._task
-
-    @task.setter
-    def task(self, task):
-        if self._task:
-            raise AttributeError("attribute 'task' already set")
-        self._task = task
+    def listen(self):
+        return topics_to_listen(self.topics)
 
     def new_task(self, *args, loop=None, **kwargs):
         """
         Create a new task from the current task template.
         """
         inputs = (args, kwargs)
-        task = new_task(self.name, inputs=inputs,
+        return new_task(self.name, inputs=inputs,
                         config=self.config, loop=loop)
-        self.task = task
-        return task
 
     @classmethod
     def from_dict(cls, task_dict):
@@ -80,34 +70,7 @@ class TaskTemplate:
         """
         task_dict = {"name": self.name, "id": self.uid}
         task_dict.update({"config": self.config, "topics": self.topics})
-        exec_dict = self._report()
-        if exec_dict:
-            task_dict['exec'] = exec_dict
         return task_dict
 
     def __str__(self):
         return "<TaskTemplate name={}, uid={}>".format(self.name, self.uid)
-
-    def _report(self):
-        """
-        Creates and returns an execution report provided that the task template
-        was previously linked to an execution object.
-        An execution report is a dict that usually takes the form of:
-            {
-                "id": <execution-id>,
-                "state": <execution-state>
-                "info": <execution-details-as-a-dict>
-            }
-        """
-        if not self.task:
-            return dict()
-        # If the task is linked to a task holder, try to use its own report.
-        try:
-            return self.task.holder.report()
-        except AttributeError:
-            if hasattr(self.task, 'uid'):
-                uid = self.task.uid
-            else:
-                uid = None
-            state = future_state(self.task).value
-            return {"id": uid, "state": state}
