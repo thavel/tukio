@@ -14,13 +14,17 @@ log = logging.getLogger(__name__)
 
 
 class LoadWorkflowError(Exception):
-    def __init__(self, new_tmpl, current_tmpl):
+
+    def __init__(self, new_tmpl, current_tmpl, message=None):
         super().__init__()
         self.new = new_tmpl
         self.current = current_tmpl
+        self.message = message
 
     def __str__(self):
         err = 'cannot load {}, it is not newer than {}'
+        if self.message is not None:
+            err = err + '. ' + self.message
         return err.format(self.new, self.current)
 
 

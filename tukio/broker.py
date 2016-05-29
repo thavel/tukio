@@ -36,7 +36,7 @@ class Broker(object):
     The workflow engine has a global event broker that gathers external events
     (e.g. from the network) and internal events (e.g. from tasks) and schedules
     the execution of registered handlers.
-    A handler can be registerd as global (receives all events) or per-topic
+    A handler can be registered as global (receives all events) or per-topic
     (receives events only from its registered topics).
     If an event is disptached with a topic, all handlers registered with that
     topic will be executed as well as all global handlers. Else, only global
