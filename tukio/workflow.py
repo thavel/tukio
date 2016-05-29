@@ -392,6 +392,8 @@ class Workflow(asyncio.Future):
         """
         if topics is None:
             itertopics = [None]
+        else:
+            itertopics = topics
         for topic in itertopics:
             try:
                 self._broker.unregister(callback, topic=topic)

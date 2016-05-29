@@ -8,6 +8,7 @@ import logging
 from tukio.workflow import OverrunPolicy, new_workflow
 from tukio.broker import get_broker
 from tukio.task import tukio_factory
+from tukio.utils import Listen
 
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ class _WorkflowSelector:
     """
 
     def __init__(self):
-        self._topics = {None: set()}
+        self._selector = {Listen.everything: set()}
         self._templates = dict()
 
     def load(self, template):
@@ -48,51 +49,49 @@ class _WorkflowSelector:
         Loads a new workflow template in the selector. If a previous version
         of this template was loaded, unload it first.
         """
-        # A workflow template is uniquely defined by the tuple
-        # (template ID, version)
+        # Cleanup the current template ID/topic associations before loading the
+        # new template.
         try:
             current = self._templates[template.uid]
         except KeyError:
-            self._templates[template.uid] = template
-            current = None
+            pass
         else:
-            if current.version >= template.version:
+            # A workflow template is uniquely defined by the tuple
+            # (template ID, version) but only a single version of template ID
+            # can be loaded.
+            # TODO: support multiple versions of the same template?
+            if current.version > template.version:
                 raise LoadWorkflowError(template, current)
             else:
-                self._templates[template.uid] = template
+                self.unload(current.uid)
+        self._templates[template.uid] = template
 
-        # Update the template ID/topics association
-        if current is not None:
-            self.unload(current)
-        topics = template.topics
-        if topics is not None:
-            for topic in topics:
+        # Add new template ID/topic associations
+        listen = template.listen
+        if listen is Listen.everything:
+            self._selector[Listen.everything].add(template)
+        elif listen is Listen.topics:
+            for topic in template.topics:
                 try:
-                    self._topics[topic].add(template)
+                    self._selector[topic].add(template)
                 except KeyError:
-                    self._topics[topic] = {template}
-        else:
-            self._topics[None].add(template)
+                    self._selector[topic] = {template}
 
     def unload(self, tmpl_id):
         """
-        Unloads a workflow template from the selector.
+        Unloads a workflow template from the selector. Raises a `KeyError`
+        exception if the given template ID is not loaded.
         """
-        try:
-            template = self._templates.pop(tmpl_id)
-        except KeyError:
-            # Nothing to unload
-            return None
+        template = self._templates.pop(tmpl_id)
 
-        # Update the template ID/topics association
-        topics = template.topics
-        if topics is not None:
-            for topic in topics:
-                self._topics[topic].discard(template)
-                if not self._topics[topic]:
-                    del self._topics[topic]
-        else:
-            self._topics[None].discard(template)
+        listen = template.listen
+        if listen is Listen.everything:
+            self._selector[Listen.everything].remove(template)
+        elif listen is Listen.topics:
+            for topic in template.topics:
+                self._selector[topic].remove(template)
+                if not self._selector[topic]:
+                    del self._selector[topic]
         return template
 
     def clear(self):
@@ -102,8 +101,8 @@ class _WorkflowSelector:
         empty list.
         """
         self._templates.clear()
-        self._topics.clear()
-        self._topics[None] = set()
+        self._selector.clear()
+        self._selector[Listen.everything] = set()
 
     def get(self, topic=None):
         """
@@ -114,14 +113,13 @@ class _WorkflowSelector:
         """
         # Always include the set of global workflow templates (trigger-able in
         # any case)
-        global_tmpls = self._topics[None]
+        templates = self._selector[Listen.everything]
         if topic is not None:
             try:
-                topic_tmpls = self._topics[topic]
+                templates = templates | self._selector[topic]
             except KeyError:
-                topic_tmpls = set()
-            return list(global_tmpls | topic_tmpls)
-        return list(global_tmpls)
+                pass
+        return list(templates)
 
 
 class Engine(asyncio.Future):
