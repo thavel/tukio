@@ -439,7 +439,6 @@ class Workflow(asyncio.Future):
         """
         try:
             args, kwargs = inputs
-            task = task_tmpl.new_task(*args, loop=self._loop, _concurrent_tasks=self.tasks, **kwargs)
             task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.

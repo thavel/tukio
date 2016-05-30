@@ -28,7 +28,7 @@ class TaskTemplate:
     def listen(self):
         return topics_to_listen(self.topics)
 
-    def new_task(self, *args, loop=None, _concurrent_tasks=set(), **kwargs):
+    def new_task(self, *args, loop=None, **kwargs):
         """
         Create a new task from the current task template.
         concurrent_tasks are usually useless
