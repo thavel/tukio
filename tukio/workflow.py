@@ -151,12 +151,12 @@ class WorkflowTemplate:
     """
 
     def __init__(self, title, uid=None, tags=None, version=None, policy=None,
-                 draft=None, topics=None):
+                 draft=False, topics=None):
         self.title = title
         self.tags = tags or []
         self.uid = uid or str(uuid4())
         self.version = int(version) if version is not None else 1
-        self.draft = bool(draft)
+        self.draft = draft
         self.topics = topics
         self.policy = OverrunPolicy.get(policy)
         self.dag = DAG()
@@ -254,7 +254,7 @@ class WorkflowTemplate:
             uid=wf_dict.get('id'),
             tags=wf_dict.get('tags'),
             version=wf_dict.get('version'),
-            draft=wf_dict.get('draft'),
+            draft=wf_dict.get('draft', False),
             policy=wf_dict.get('policy'),
             topics=wf_dict.get('topics')
         )
@@ -280,7 +280,7 @@ class WorkflowTemplate:
             "id": self.uid,
             "tags": self.tags,
             "version": int(self.version),
-            "draft": bool(self.draft),
+            "draft": self.draft,
             "policy": self.policy.value,
             "topics": self.topics,
             "tasks": [],
