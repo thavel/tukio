@@ -1,11 +1,12 @@
 import logging
 from uuid import uuid4
 
-from .join import JoinTask
-from .task import new_task, new_task_call, TaskRegistry
+from .task import new_task, new_task_call
 from tukio.utils import topics_to_listen
 
+
 log = logging.getLogger(__name__)
+
 
 class TaskTemplate:
 

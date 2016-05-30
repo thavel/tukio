@@ -101,4 +101,4 @@ def new_task_call(holder, inputs=((), {}), loop=None):
     returns the future of the call
     """
     args, kwargs = inputs
-    return asyncio.ensure_future(holder.new_call(*args, **kwargs), loop=loop)
+    return asyncio.ensure_future(holder.data_received(*args, **kwargs), loop=loop)
