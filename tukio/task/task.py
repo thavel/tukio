@@ -94,9 +94,11 @@ def new_task(task_name, inputs=((), {}), config=None, loop=None):
         coro = coro_fn(*args, **kwargs)
     return asyncio.ensure_future(coro, loop=loop)
 
+
 def new_task_call(holder, inputs=((), {}), loop=None):
     """
     Schedule a new task call on a currently running task.
+    returns the future of the call
     """
     args, kwargs = inputs
     return asyncio.ensure_future(holder.new_call(*args, **kwargs), loop=loop)

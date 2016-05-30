@@ -7,7 +7,7 @@ import logging
 from uuid import uuid4
 
 from tukio.dag import DAG
-from tukio.task import TaskTemplate, TaskRegistry
+from tukio.task import TaskTemplate, TaskRegistry, JoinTask
 from tukio.utils import future_state, topics_to_listen, Listen
 from tukio.broker import get_broker
 
@@ -432,23 +432,14 @@ class Workflow(asyncio.Future):
         if not task:
             self._try_mark_done()
 
-    def _new_task(self, task_tmpl, inputs):
-        """
-        Each new task must be created successfully, else the whole workflow
-        shall stop running (wrong workflow config or bug).
-        """
-        try:
-            args, kwargs = inputs
-            task = task_tmpl.new_task(*args, loop=self._loop, **kwargs)
-            # Register the `data_received` callback (if required) as soon as
-            # the execution of the task is scheduled.
+    def _call_join_task(self, task_tmpl, inputs=([], {})):
+            log.debug('new join task call for {}'.format(task_tmpl))
+            task_tmpl.new_call(inputs=inputs, loop=self._loop)
+            return self._tasks_by_id[task_tmpl.uid][0]
+
+    def _create_task(self, task_tmpl, inputs=([], {})):
+            task = task_tmpl.new_task(inputs=inputs, loop=self._loop)
             self._register_to_broker(task_tmpl, task)
-        except Exception as exc:
-            log.error('failed to create task %s: raised %s', task_tmpl, exc)
-            self._internal_exc = exc
-            self._cancel_all_tasks()
-            return None
-        else:
             log.debug('new task created for %s', task_tmpl)
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
@@ -461,6 +452,29 @@ class Workflow(asyncio.Future):
                 exec_dict['id'] = None
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
+
+    def _new_task(self, task_tmpl, inputs):
+        """
+        Each new task must be created successfully, else the whole workflow
+        shall stop running (wrong workflow config or bug).
+        """
+        task = None
+        try:
+            klass, _coro = TaskRegistry.get(task_tmpl.name)
+            if task_tmpl.task and issubclass(klass, JoinTask):
+                call = self._call_join_task(task_tmpl, inputs)
+                task = task_tmpl.task
+            else:
+                task = self._create_task(task_tmpl, inputs)
+                # Register the `data_received` callback (if required) as soon as
+                # the execution of the task is scheduled.
+
+        except Exception as exc:
+            log.error('failed to create task %s: raised %s', task_tmpl, exc)
+            self._internal_exc = exc
+            self._cancel_all_tasks()
+            return None
+        return task
 
     def _run_next_tasks(self, task_tmpl, future):
         """

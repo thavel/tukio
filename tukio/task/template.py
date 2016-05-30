@@ -1,10 +1,9 @@
 import logging
 from uuid import uuid4
 
-from .join import JoinTaskHolder
+from .join import JoinTask
 from .task import new_task, new_task_call, TaskRegistry
 from tukio.utils import topics_to_listen
-
 
 log = logging.getLogger(__name__)
 
@@ -28,22 +27,23 @@ class TaskTemplate:
     def listen(self):
         return topics_to_listen(self.topics)
 
-    def new_task(self, *args, loop=None, **kwargs):
+    def new_task(self, inputs, loop=None):
         """
         Create a new task from the current task template.
         concurrent_tasks are usually useless
         """
-        inputs = (args, kwargs)
-        klass, _coro = TaskRegistry.get(self.name)
-        if self.task and issubclass(klass, JoinTaskHolder):
-            holder = self.task.holder
-            if not holder:
-                raise Exception("No holder on task {}".format(self.task))
-            new_task_call(holder, inputs=inputs, loop=loop)
-        else:i
-            self.task = new_task(self.name, inputs=inputs,
-                        config=self.config, loop=loop)
+        self.task = new_task(self.name, inputs=inputs, config=self.config, loop=loop)
         return self.task
+
+    def new_call(self, inputs, loop=None):
+        """
+        firward a call to the task
+        """
+        holder = self.task.holder
+        if not holder:
+            raise Exception("No holder on task {}".format(self.task))
+        new_call = new_task_call(holder, inputs=inputs, loop=loop)
+        return new_call
 
     @classmethod
     def from_dict(cls, task_dict):
