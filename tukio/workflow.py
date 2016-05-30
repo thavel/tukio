@@ -57,7 +57,15 @@ class OverrunPolicy(Enum):
         """
         Returns the default overrun policy.
         """
-        return OverrunPolicy.skip_until_unlock
+        return cls('skip-until-unlock')
+
+    @classmethod
+    def get(cls, policy=None):
+        if policy is None:
+            return cls.get_default_policy()
+        if isinstance(policy, cls):
+            return policy
+        return cls(policy)
 
 
 class OverrunPolicyHandler:
@@ -149,12 +157,7 @@ class WorkflowTemplate:
         self.uid = uid or str(uuid4())
         self.version = int(version) if version is not None else 1
         self.topics = topics
-        if policy is None:
-            self.policy = OverrunPolicy.get_default_policy()
-        elif isinstance(policy, OverrunPolicy):
-            self.policy = policy
-        else:
-            self.policy = OverrunPolicy(policy)
+        self.policy = OverrunPolicy.get(policy)
         self.dag = DAG()
 
     @property
