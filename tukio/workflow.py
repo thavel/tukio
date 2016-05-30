@@ -426,24 +426,27 @@ class Workflow(asyncio.Future):
             return
         # Run the root task
         root_tmpl = self._template.root()
-        task = self._new_task(root_tmpl, (args, kwargs))
+        task = self._next_task(root_tmpl, (args, kwargs))
         self._start = datetime.utcnow()
         # The workflow may fail to start at once
         if not task:
             self._try_mark_done()
 
-    def _call_join_task(self, task_tmpl, inputs=([], {})):
+    def _call_join_task(self, task_tmpl, task, inputs):
             log.debug('new join task call for {}'.format(task_tmpl))
-            task_tmpl.new_call(inputs=inputs, loop=self._loop)
-            return self._tasks_by_id[task_tmpl.uid][0]
+            return task_tmpl.new_call(task, inputs=inputs, loop=self._loop)
 
-    def _create_task(self, task_tmpl, inputs=([], {})):
+    def _create_task(self, task_tmpl, inputs):
             task = task_tmpl.new_task(inputs=inputs, loop=self._loop)
+
+            # Register the `data_received` callback (if required) as soon as
+            # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
             log.debug('new task created for %s', task_tmpl)
             done_cb = functools.partial(self._run_next_tasks, task_tmpl)
             task.add_done_callback(done_cb)
             self.tasks.add(task)
+
             # Create the exec dict of the task
             exec_dict = {'start': datetime.utcnow()}
             try:
@@ -453,24 +456,21 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def _new_task(self, task_tmpl, inputs):
+    def _next_task(self, task_tmpl, inputs):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
         """
         task = None
         try:
-            klass, _coro = TaskRegistry.get(task_tmpl.name)
-            if task_tmpl.task and issubclass(klass, JoinTask):
-                call = self._call_join_task(task_tmpl, inputs)
-                task = task_tmpl.task
+            klass, _ = TaskRegistry.get(task_tmpl.name)
+            if task_tmpl.uid in self._tasks_by_id and issubclass(klass, JoinTask):
+                task, exec_dict = self._tasks_by_id[task_tmpl.uid]
+                call = self._call_join_task(task_tmpl, task, inputs)
             else:
                 task = self._create_task(task_tmpl, inputs)
-                # Register the `data_received` callback (if required) as soon as
-                # the execution of the task is scheduled.
-
         except Exception as exc:
-            log.error('failed to create task %s: raised %s', task_tmpl, exc)
+            log.error('failed to create or call task %s: raised %s', task_tmpl, exc)
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
@@ -497,7 +497,7 @@ class Workflow(asyncio.Future):
             succ_tmpls = self._template.dag.successors(task_tmpl)
             for succ_tmpl in succ_tmpls:
                 inputs = ((result,), {})
-                succ_task = self._new_task(succ_tmpl, inputs)
+                succ_task = self._next_task(succ_tmpl, inputs)
                 if not succ_task:
                     break
         finally:

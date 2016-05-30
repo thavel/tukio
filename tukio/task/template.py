@@ -22,7 +22,6 @@ class TaskTemplate:
         self.config = config
         self.topics = topics
         self.uid = uid or str(uuid4())
-        self.task = None
 
     @property
     def listen(self):
@@ -31,18 +30,17 @@ class TaskTemplate:
     def new_task(self, inputs, loop=None):
         """
         Create a new task from the current task template.
-        concurrent_tasks are usually useless
         """
-        self.task = new_task(self.name, inputs=inputs, config=self.config, loop=loop)
-        return self.task
+        return new_task(self.name, inputs=inputs,
+                        config=self.config, loop=loop)
 
-    def new_call(self, inputs, loop=None):
+    def new_call(self, task, inputs, loop=None):
         """
-        firward a call to the task
+        forward a call to the task
         """
-        holder = self.task.holder
+        holder = task.holder
         if not holder:
-            raise Exception("No holder on task {}".format(self.task))
+            raise Exception("No holder on task {}".format(task))
         new_call = new_task_call(holder, inputs=inputs, loop=loop)
         return new_call
 
