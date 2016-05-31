@@ -1,7 +1,7 @@
 import logging
 from uuid import uuid4
 
-from .task import new_task, new_task_call
+from .task import new_task
 from tukio.utils import topics_to_listen
 
 

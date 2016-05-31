@@ -25,16 +25,18 @@ class JoinTask(TaskHolder):
 
     async def execute(self, data):
         log.debug('join task {} started.'.format(self))
-        self.data_received(data)
+        self.data_received(data, from_parent=True)
         await self.unlock
         log.debug('join task {} done.'.format(self))
         return self.data_stash
 
-    async def data_received(self, data):
+    def data_received(self, data, from_parent=False):
         """
         Is called when the task is started and a new parents finished.
         configuration takes the number of parents required to follow up.
         """
+        if not from_parent:
+            return
         log.debug('Received join task data {}'.format(data))
         self.data_stash.append(data)
         if self.ready():

@@ -443,7 +443,7 @@ class Workflow(asyncio.Future):
         if not holder:
             raise Exception("No holder on task {}".format(task))
 
-        return asyncio.ensure_future(holder.data_received(*args, **kwargs), loop=self._loop)
+        return holder.data_received(*args, from_parent=True, **kwargs)
 
     def _create_task(self, task_tmpl, inputs):
             task = task_tmpl.new_task(inputs=inputs, loop=self._loop)
@@ -473,7 +473,7 @@ class Workflow(asyncio.Future):
         task = None
         try:
             klass, _ = TaskRegistry.get(task_tmpl.name)
-            if task_tmpl.uid in self._tasks_by_id and issubclass(klass, JoinTask):
+            if task_tmpl.uid in self._tasks_by_id:
                 task, exec_dict = self._tasks_by_id[task_tmpl.uid]
                 call = self._call_join_task(task_tmpl, task, inputs)
             else:
