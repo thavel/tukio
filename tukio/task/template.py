@@ -34,16 +34,6 @@ class TaskTemplate:
         return new_task(self.name, inputs=inputs,
                         config=self.config, loop=loop)
 
-    def new_call(self, task, inputs, loop=None):
-        """
-        forward a call to the task
-        """
-        holder = task.holder
-        if not holder:
-            raise Exception("No holder on task {}".format(task))
-        new_call = new_task_call(holder, inputs=inputs, loop=loop)
-        return new_call
-
     @classmethod
     def from_dict(cls, task_dict):
         """

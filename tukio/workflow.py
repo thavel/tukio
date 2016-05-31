@@ -433,8 +433,17 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
 
     def _call_join_task(self, task_tmpl, task, inputs):
-            log.debug('new join task call for {}'.format(task_tmpl))
-            return task_tmpl.new_call(task, inputs=inputs, loop=self._loop)
+        """
+        Plan an update on a join task informing one of it's parents is done.
+        """
+        log.debug('new join task call for {}'.format(task_tmpl))
+
+        args, kwargs = inputs
+        holder = task.holder
+        if not holder:
+            raise Exception("No holder on task {}".format(task))
+
+        return asyncio.ensure_future(holder.data_received(*args, **kwargs), loop=self._loop)
 
     def _create_task(self, task_tmpl, inputs):
             task = task_tmpl.new_task(inputs=inputs, loop=self._loop)
