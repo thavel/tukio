@@ -87,9 +87,9 @@ class OverrunPolicyHandler:
         return method(running)
 
     def _check_wflow(self, wflow):
-        if wflow.template_id != self.template.uid:
+        if wflow.template.uid != self.template.uid:
             err = 'expected template ID {}'', got {}'
-            raise ValueError(err.format(self.template.uid, wflow.template_id))
+            raise ValueError(err.format(self.template.uid, wflow.template.uid))
 
     def _new_wflow(self):
         return Workflow(self.template, loop=self._loop)
@@ -352,8 +352,8 @@ class Workflow(asyncio.Future):
         self._broker = broker or get_broker(self._loop)
 
     @property
-    def template_id(self):
-        return self._template.uid
+    def template(self):
+        return self._template
 
     @property
     def policy(self):
@@ -564,7 +564,7 @@ class Workflow(asyncio.Future):
         """
         string = ("<Workflow template_id={}, template_title={}, uid={}, "
                   "start={}, end={}>")
-        tmpl_id, title = self.template_id, self._template.title
+        tmpl_id, title = self._template.uid, self._template.title
         return string.format(tmpl_id, title, self.uid, self._start, self._end)
 
     def report(self):

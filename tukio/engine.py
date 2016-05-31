@@ -185,9 +185,9 @@ class Engine(asyncio.Future):
         weak value dict to index it by its execution ID.
         """
         try:
-            self._running[wflow.template_id].append(wflow)
+            self._running[wflow.template.uid].append(wflow)
         except KeyError:
-            self._running[wflow.template_id] = [wflow]
+            self._running[wflow.template.uid] = [wflow]
         self._running_by_id[wflow.uid] = wflow
         log.debug('new workflow started %s', wflow)
 
@@ -195,12 +195,12 @@ class Engine(asyncio.Future):
         """
         Removes a worflow instance from the dict of running workflows.
         """
-        self._running[wflow.template_id].remove(wflow)
+        self._running[wflow.template.uid].remove(wflow)
         # Cleanup the running dict if no more running instance of that template
-        if len(self._running[wflow.template_id]) == 0:
-            del self._running[wflow.template_id]
+        if len(self._running[wflow.template.uid]) == 0:
+            del self._running[wflow.template.uid]
         del self._running_by_id[wflow.uid]
-        log.debug('workflow removed from the running list: {}'.format(wflow))
+        log.debug('workflow removed from the running list: %s', wflow)
         if self._must_stop and not self._running and not self.done():
             self.set_result(None)
             log.debug('no more workflow running, engine stopped')
@@ -271,7 +271,10 @@ class Engine(asyncio.Future):
         which in turn will disptach this event to the right running workflows
         and may trigger new workflow executions.
         """
-        log.debug("data received '%s' in topic '%s'", data, topic)
+        if topic:
+            log.debug("data received '%s' in topic '%s'", data, topic)
+        else:
+            log.debug("data received '%s' (no topic)", data)
         self._broker.dispatch(data, topic)
         # Don't start new workflow instances if `stop()` was called.
         if self._must_stop:
@@ -287,6 +290,13 @@ class Engine(asyncio.Future):
                     wflows.append(wflow)
         return wflows
 
+    def _do_run(self, wflow, data):
+        """
+        Adds a workflow to the running list and actually starts it.
+        """
+        self._add_wflow(wflow)
+        wflow.run(data)
+
     def _try_run(self, template, data):
         """
         Try to run a new instance of workflow defined by `tmpl_id` according to
@@ -297,14 +307,13 @@ class Engine(asyncio.Future):
         # instances may run with an old version of the template)
         wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
-            self._add_wflow(wflow)
             wflow.add_done_callback(self._remove_wflow)
             if template.policy == OverrunPolicy.abort_running and running:
                 def cb():
-                    wflow.run(data)
+                    self._do_run(wflow, data)
                 asyncio.ensure_future(self._wait_abort(running, cb))
             else:
-                wflow.run(data)
+                self._do_run(wflow, data)
         else:
             log.debug("skip new workflow from %s (overrun policy)", template)
         return wflow
@@ -314,7 +323,10 @@ class Engine(asyncio.Future):
         Wait for the end of a list of aborted (cancelled) workflows before
         starting a new one when the policy is 'abort-running'.
         """
-        await asyncio.wait(running)
+        # Always act on a snapshot of the original running list. Don't forget
+        # it is a living list!
+        others = list(running)
+        await asyncio.wait(others)
         callback()
 
     def run(self, tmpl_id, inputs, draft=False):
@@ -342,7 +354,7 @@ class Engine(asyncio.Future):
         wflow = self._running_by_id.get(exec_id)
         if wflow:
             wflow.cancel()
-            log.debug('cancelled workflow {}'.format(wflow))
+            log.debug('cancelled workflow %s', wflow)
         return wflow
 
     def cancel_all(self):
@@ -355,5 +367,5 @@ class Engine(asyncio.Future):
                 is_cancelled = wflow.cancel()
                 if is_cancelled:
                     cancelled += 1
-        log.debug('cancelled {} workflows'.format(cancelled))
+        log.debug('cancelled %s workflows', cancelled)
         return cancelled
