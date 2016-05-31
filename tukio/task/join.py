@@ -15,7 +15,6 @@ class JoinTask(TaskHolder):
     and decide wether or not unlock the task, wait depending on the calls received
     """
 
-    NAME = 'join_task'
     unlock = asyncio.Future()
     data_stash = []
 
