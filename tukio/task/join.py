@@ -15,8 +15,10 @@ class JoinTask(TaskHolder):
     and decide wether or not unlock the task, wait depending on the calls received
     """
 
-    unlock = asyncio.Future()
-    data_stash = []
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.unlock = asyncio.Future()
+        self.data_stash = []
 
     def ready(self):
         return len(self.data_stash) >= self.config.get('await_parents', 0)
@@ -25,10 +27,8 @@ class JoinTask(TaskHolder):
         log.debug('join task {} started.'.format(self))
         self.data_received(data)
         await self.unlock
-        for call in self.data_stash:
-            data.update(call)
         log.debug('join task {} done.'.format(self))
-        return data
+        return self.data_stash
 
     async def data_received(self, data):
         """
