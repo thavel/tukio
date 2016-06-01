@@ -311,8 +311,9 @@ class WorkflowTemplate:
         If not valid, this method should raise either `WorkflowRootTaskError`
         or `UnknownTaskName` exceptions.
         """
-        if len(self.dag.root_nodes()) != 1:
-            raise WorkflowRootTaskError
+        root_nodes = len(self.dag.root_nodes())
+        if root_nodes != 1:
+            raise WorkflowRootTaskError(root_nodes)
         for task in self.tasks:
             klass, _ = TaskRegistry.get(task.name)
             # Check there's a `data_received` callback if the task is
