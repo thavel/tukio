@@ -54,7 +54,7 @@ class TaskRegistry:
         try:
             return cls._registry[task_name]
         except KeyError as exc:
-            raise UnknownTaskName(exc)
+            raise UnknownTaskName from exc
 
     @classmethod
     def all(cls):
