@@ -96,6 +96,7 @@ class Broker(object):
                 raise ValueError('{} already registered with'
                                  ' topics'.format(coro_or_cb))
             self._global_handlers.add(coro_or_cb)
+            log.debug('registered global handler: %s', coro_or_cb)
         # Register a per-topic handler
         else:
             if coro_or_cb in self._global_handlers:
@@ -105,6 +106,7 @@ class Broker(object):
                 self._topic_handlers[topic].add(coro_or_cb)
             except KeyError:
                 self._topic_handlers[topic] = {coro_or_cb}
+            log.debug('registered topic handler: %s', coro_or_cb)
 
     def unregister(self, coro_or_cb, topic=None):
         """

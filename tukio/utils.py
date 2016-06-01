@@ -17,18 +17,18 @@ class FutureState(Enum):
     exception = 'exception'
     finished = 'finished'
 
-
-def future_state(future):
-    """
-    Returns the state of a future as an enumeration member (from `FutureState`)
-    """
-    if not future.done():
-        return FutureState.pending
-    if future.cancelled():
-        return FutureState.cancelled
-    if future._exception:
-        return FutureState.exception
-    return FutureState.finished
+    @classmethod
+    def get(cls, future):
+        """
+        Returns the state of a future as `FutureState` member
+        """
+        if not future.done():
+            return cls.pending
+        if future.cancelled():
+            return cls.cancelled
+        if future._exception:
+            return cls.exception
+        return cls.finished
 
 
 class Listen(Enum):
@@ -45,17 +45,16 @@ class Listen(Enum):
     nothing = "nothing"
     topics = "topics"
 
-
-def topics_to_listen(topics):
-    """
-    Maps the value of `topics` to the corresponding event listening behavior
-    of a task.
-    """
-    if topics is None:
-        return Listen.everything
-    elif topics == []:
-        return Listen.nothing
-    elif isinstance(topics, list):
-        return Listen.topics
-    else:
-        raise TypeError("'{}' is not a list".format(topics))
+    @classmethod
+    def get(cls, topics):
+        """
+        Returns event listening behavior of a task as a `Listen` member
+        """
+        if topics is None:
+            return cls.everything
+        elif topics == []:
+            return cls.nothing
+        elif isinstance(topics, list):
+            return cls.topics
+        else:
+            raise TypeError("'{}' is not a list".format(topics))

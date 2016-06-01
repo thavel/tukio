@@ -2,7 +2,7 @@ import logging
 from uuid import uuid4
 
 from .task import new_task
-from tukio.utils import topics_to_listen
+from tukio.utils import Listen
 
 
 log = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class TaskTemplate:
     `asyncio.Task`) and provide execution report.
     """
 
-    def __init__(self, name, uid=None, config=None, topics=[]):
+    def __init__(self, name, uid=None, config=None, topics=None):
         self.name = name
         self.config = config
         self.topics = topics
@@ -25,7 +25,7 @@ class TaskTemplate:
 
     @property
     def listen(self):
-        return topics_to_listen(self.topics)
+        return Listen.get(self.topics)
 
     def new_task(self, inputs, loop=None):
         """
@@ -51,6 +51,7 @@ class TaskTemplate:
         'topics':
             {"topics": None}
             the task will receive ALL data disptached by the broker
+            ** default behavior **
 
             {"topics": []}
             the task will receive NO data from the broker
@@ -62,7 +63,7 @@ class TaskTemplate:
         uid = task_dict.get('id')
         name = task_dict['name']
         config = task_dict.get('config')
-        topics = task_dict.get('topics', [])
+        topics = task_dict.get('topics')
         return cls(name, uid=uid, config=config, topics=topics)
 
     def as_dict(self):

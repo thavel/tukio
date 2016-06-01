@@ -7,8 +7,8 @@ import logging
 from uuid import uuid4
 
 from tukio.dag import DAG
-from tukio.task import TaskTemplate, TaskRegistry, JoinTask
-from tukio.utils import future_state, topics_to_listen, Listen
+from tukio.task import TaskTemplate, TaskRegistry
+from tukio.utils import FutureState, Listen
 from tukio.broker import get_broker
 
 
@@ -167,7 +167,7 @@ class WorkflowTemplate:
 
     @property
     def listen(self):
-        return topics_to_listen(self.topics)
+        return Listen.get(self.topics)
 
     def add(self, task_tmpl):
         """
@@ -240,6 +240,7 @@ class WorkflowTemplate:
         value of 'topics':
             {"topics": None}
             try to trigger a workflow each time data is received by the engine
+            ** default behavior **
 
             {"topics": []}
             never try to trigger a workflow when data is received by the engine
@@ -310,9 +311,20 @@ class WorkflowTemplate:
         If not valid, this method should raise either `WorkflowRootTaskError`
         or `UnknownTaskName` exceptions.
         """
-        self.root()
+        if len(self.dag.root_nodes()) != 1:
+            raise WorkflowRootTaskError
         for task in self.tasks:
-            TaskRegistry.get(task.name)
+            klass, _ = TaskRegistry.get(task.name)
+            # Check there's a `data_received` callback if the task is
+            # configured receive data during execution.
+            if (task.listen is not Listen.nothing and
+               not hasattr(klass, 'data_received')):
+                # Warn the user but don't raise an exception otherwise this
+                # would force the user to explicitely configure each
+                # coroutine-based tasks with {"topics": []}
+                log.warning("CAUTION: task '%s' has no callback to receive "
+                            "data during execution, will be ignored!",
+                            task.name)
         return True
 
     def __str__(self):
@@ -379,13 +391,14 @@ class Workflow(asyncio.Future):
         if listen is Listen.nothing:
             return
 
-        # Since the task is configured to receive data during execution it MUST
-        # be possible to register a callback.
+        # Try to register a callback, otherwise returns.
+        # Note: a warning message must have warned the user on loading the
+        # template in the engine.
         try:
             callback = task.holder.data_received
         except AttributeError as exc:
-            log.error("no callback to register in broker (%s)", exc)
-            raise
+            log.debug('no callback to register in broker (%s), ignored', exc)
+            return
 
         # Register the callback in the event broker
         if listen is Listen.everything:
@@ -573,7 +586,7 @@ class Workflow(asyncio.Future):
         tasks templates and execution details.
         """
         wf_exec = {"id": self.uid, "start": self._start, "end": self._end}
-        wf_exec['state'] = future_state(self).value
+        wf_exec['state'] = FutureState.get(self).value
         report = self._template.as_dict()
         report['exec'] = wf_exec
         # Update task descriptions to add info about their execution.
@@ -584,7 +597,7 @@ class Workflow(asyncio.Future):
             except KeyError:
                 task_dict.update({'exec': None})
                 continue
-            exec_dict['state'] = future_state(task).value
+            exec_dict['state'] = FutureState.get(task).value
             # If the task is linked to a task holder, try to use its own report
             try:
                 task_report = task.holder.report()
