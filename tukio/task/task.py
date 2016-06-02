@@ -86,6 +86,8 @@ def new_task(task_name, inputs=((), {}), config=None, loop=None):
     of `asyncio.Task()` (or a subclass of it).
     """
     klass, coro_fn = TaskRegistry.get(task_name)
+    # TODO: don't try to unpack arguments, and pass inputs as is to
+    # the coroutine
     args, kwargs = inputs
     if klass:
         task_holder = klass(config)

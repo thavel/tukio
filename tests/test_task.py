@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 from tukio.task import (
     TaskHolder, register, tukio_factory, TukioTask, TaskRegistry,
-    UnknownTaskName
+    UnknownTaskName, new_task
 )
 
 
@@ -31,25 +31,30 @@ async def other_coro():
 def my_func():
     return None
 
+# utils
+
+
+@contextmanager
+def _temp_registration():
+    """
+    Temporarily add new registrations to the current TaskRegistry
+    """
+    try:
+        saved_registry = TaskRegistry._registry.copy()
+        saved_codes = TaskRegistry._codes.copy()
+        yield
+    finally:
+        TaskRegistry._registry = saved_registry
+        TaskRegistry._codes = saved_codes
+
+# tests
+
 
 class TestTaskRegistry(unittest.TestCase):
 
     """
     Test task holder and coroutine registrations
     """
-
-    @contextmanager
-    def _temp_registration(self, registry):
-        """
-        Temporarily add new registrations to the current TaskRegistry
-        """
-        try:
-            saved_registry = registry._registry.copy()
-            saved_codes = registry._codes.copy()
-            yield
-        finally:
-            registry._registry = saved_registry
-            registry._codes = saved_codes
 
     def test_current_registry(self):
         """
@@ -146,11 +151,90 @@ class TestTaskRegistry(unittest.TestCase):
             async def dummy(self):
                 pass
 
-        with self._temp_registration(TaskRegistry):
+        with _temp_registration():
             register('dummy-task', 'dummy')(DummyTask)
             klass, coro_fn = TaskRegistry.get('dummy-task')
             self.assertIs(klass, DummyTask)
             self.assertIs(coro_fn, DummyTask.dummy)
+
+
+class TestNewTask(unittest.TestCase):
+
+    """
+    Test new tasks are created as expected from registered Tukio tasks.
+    """
+
+    def test_new_task_ok(self):
+        """
+        Various cases which must lead to create asyncio tasks successfully.
+        """
+        # Create a task from a task holder
+        task = new_task('my-task-holder')
+        self.assertTrue(isinstance(task, asyncio.Task))
+
+        # Create a task from a simple coroutine
+        task = new_task('my-coro-task')
+        self.assertTrue(isinstance(task, asyncio.Task))
+
+    def test_new_task_unknown(self):
+        """
+        Cannot create a new task from an unknown name. It must raise a KeyError
+        exception (just like `TaskRegistry.get`).
+        """
+        with self.assertRaises(UnknownTaskName):
+            new_task('dummy')
+
+    def test_new_task_bad_inputs(self):
+        """
+        Trying to create a new asyncio task with invalid inputs must raise
+        a `ValueError` exception.
+
+        XXX: see TODO in the code!
+        """
+        with self.assertRaisesRegex(ValueError, 'too many values to unpack'):
+            new_task('my-coro-task', inputs='dummy')
+
+    def test_new_task_bad_holder(self):
+        """
+        Trying to create a new task from an invalid task holder may raise
+        various exceptions. Ensure those exceptions are raised by `new_task`.
+        """
+        # __init__ takes no arg/kwarg
+        class DummyTask1:
+            async def execute(self):
+                pass
+
+        with _temp_registration():
+            register('dummy-task', 'execute')(DummyTask1)
+            with self.assertRaises(TypeError):
+                new_task('dummy-task', config={'hello': 'world'})
+
+        # __init__ takes two args
+        class DummyTask2:
+            def __init__(self, config, dummy):
+                pass
+            async def execute(self):
+                pass
+
+        with _temp_registration():
+            register('dummy-task', 'execute')(DummyTask2)
+            with self.assertRaises(TypeError):
+                new_task('dummy-task', config={'hello': 'world'})
+
+        # __init__ tries to perform an invalid operation on the config dict
+        class MyException(Exception):
+            pass
+
+        class DummyTask3:
+            def __init__(self, config):
+                raise MyException
+            async def execute(self):
+                pass
+
+        with _temp_registration():
+            register('dummy-task', 'execute')(DummyTask3)
+            with self.assertRaises(MyException):
+                new_task('dummy-task')
 
 
 class TestTaskFactory(unittest.TestCase):
