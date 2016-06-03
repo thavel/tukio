@@ -1,7 +1,7 @@
 """Test all task modules from tukio.task"""
 import unittest
 import asyncio
-from contextlib import contextmanager
+from uuid import uuid4
 
 from tukio.task import (
     TaskHolder, register, tukio_factory, TukioTask, TaskRegistry,
@@ -13,39 +13,90 @@ MY_TASK_HOLDER_RES = 'Tukio task as task holder'
 MY_CORO_TASK_RES = 'Tukio task as coroutine'
 
 
-@register('my-task-holder', 'do_it')
 class MyTaskHolder(TaskHolder):
+    """A valid task holder"""
+    def __init__(self, config):
+        self.config = config
+        self.uid = str(uuid4())
+
     async def do_it(self):
         return MY_TASK_HOLDER_RES
 
 
-@register('my-coro-task')
+class BasicTaskHolder:
+    """A valid task does not necessarily inherit from `TaskHolder`"""
+    def __init__(self, config):
+        pass
+
+    async def mycoro(self):
+        pass
+
+
+class BadInitTaskHolder1:
+    """A class with `__init__` that does not match the expected signature:
+    (self, config, *, **kwargs)
+    """
+    def __init__(self):
+        pass
+
+    async def dummy(self):
+        pass
+
+
+class MyDummyError(Exception):
+    pass
+
+
+class BadInitTaskHolder2:
+    """A class with `__init__` that raises an exception"""
+    def __init__(self, config):
+        raise MyDummyError
+
+    async def dummy(self):
+        pass
+
+
+class BadInitTaskHolder3:
+    """A class without coroutine to register"""
+    def __init__(self):
+        pass
+
+    def dummy(self):
+        pass
+
+
 async def my_coro_task():
+    """A valid coroutine"""
     return MY_CORO_TASK_RES
 
 
 async def other_coro():
+    """Another valid coroutine"""
     return None
 
 
 def my_func():
+    """A dummy function (not a valid Tukio task)"""
     return None
+
+
+def my_gen():
+    """A dummy generator (not a valid Tukio task)"""
+    yield 'dummy'
+
 
 # utils
 
 
-@contextmanager
-def _temp_registration():
-    """
-    Temporarily add new registrations to the current TaskRegistry
-    """
-    try:
-        saved_registry = TaskRegistry._registry.copy()
-        saved_codes = TaskRegistry._codes.copy()
-        yield
-    finally:
-        TaskRegistry._registry = saved_registry
-        TaskRegistry._codes = saved_codes
+def _save_registry():
+    return TaskRegistry._registry.copy(), TaskRegistry._codes.copy()
+
+
+def _restore_registry(backup):
+    registry, codes = backup
+    TaskRegistry._registry = registry
+    TaskRegistry._codes = codes
+
 
 # tests
 
@@ -56,18 +107,34 @@ class TestTaskRegistry(unittest.TestCase):
     Test task holder and coroutine registrations
     """
 
-    def test_current_registry(self):
+    def setUp(self):
+        self._backup = _save_registry()
+
+    def tearDown(self):
+        _restore_registry(self._backup)
+
+    def test_valid_registrations(self):
         """
         Check the current registry (provisioned by registered task holder and
         coroutine) holds the right references.
         """
         # A task holder is registered as a tuple made of (klass, coro_fn)
+        register('my-task-holder', 'do_it')(MyTaskHolder)
         klass, coro_fn = TaskRegistry.get('my-task-holder')
         self.assertIs(klass, MyTaskHolder)
         self.assertIs(coro_fn, MyTaskHolder.do_it)
+        self.assertEqual(MyTaskHolder.TASK_NAME, 'my-task-holder')
 
         # A coroutine is registered as a tuple made of (None, coro_fn)
+        register('my-coro-task')(my_coro_task)
         klass, coro_fn = TaskRegistry.get('my-coro-task')
+        self.assertIs(klass, None)
+        self.assertIs(coro_fn, my_coro_task)
+
+        # A coroutine can be registered sevral times with distinct names.
+        # Note that an extra parameter passed to register will be ignored.
+        register('other-coro-task', 'dummy')(my_coro_task)
+        klass, coro_fn = TaskRegistry.get('other-coro-task')
         self.assertIs(klass, None)
         self.assertIs(coro_fn, my_coro_task)
 
@@ -91,19 +158,14 @@ class TestTaskRegistry(unittest.TestCase):
             register('dummy')(my_func)
 
         # A generator cannot be registered either
-        def dummy():
-            yield 'dummy'
         with self.assertRaisesRegex(TypeError, err):
-            register('dummy')(dummy)
+            register('dummy')(my_gen)
         with self.assertRaisesRegex(TypeError, err):
-            register('dummy')(dummy())
+            register('dummy')(my_gen())
 
         # A simple method is not a valid task
-        class DummyTask:
-            def dummy(self):
-                pass
         with self.assertRaisesRegex(TypeError, err):
-            register('dummy-task', 'dummy')(DummyTask)
+            register('dummy-task', 'dummy')(BadInitTaskHolder3)
 
         # No new item must have been registered
         self.assertEqual(registered, len(TaskRegistry.all()))
@@ -113,6 +175,7 @@ class TestTaskRegistry(unittest.TestCase):
         Trying to register a Tukio task with a name already used must raise a
         `ValueError` exception.
         """
+        register('my-coro-task')(other_coro)
         with self.assertRaisesRegex(ValueError, 'already registered'):
             register('my-coro-task')(other_coro)
 
@@ -123,21 +186,17 @@ class TestTaskRegistry(unittest.TestCase):
         """
         registered = len(TaskRegistry.all())
 
-        class DummyTask:
-            async def dummy(self):
-                pass
-
         # Register a class without the name of the method to register
         with self.assertRaisesRegex(TypeError, 'getattr()'):
-            register('dummy-task')(DummyTask)
+            register('dummy-task')(MyTaskHolder)
 
         # Register a class with an invalid `coro_name` arg
         with self.assertRaisesRegex(TypeError, 'getattr()'):
-            register('dummy-task', object())(DummyTask)
+            register('dummy-task', object())(MyTaskHolder)
 
         # Register a class with a wrong method name
         with self.assertRaisesRegex(AttributeError, 'yolo'):
-            register('dummy-task', 'yolo')(DummyTask)
+            register('dummy-task', 'yolo')(MyTaskHolder)
 
         # No new item must have been registered
         self.assertEqual(registered, len(TaskRegistry.all()))
@@ -147,22 +206,37 @@ class TestTaskRegistry(unittest.TestCase):
         A class that does not inherit from `TaskHolder` is still a valid task
         holder if registered properly.
         """
-        class DummyTask:
-            async def dummy(self):
-                pass
-
-        with _temp_registration():
-            register('dummy-task', 'dummy')(DummyTask)
-            klass, coro_fn = TaskRegistry.get('dummy-task')
-            self.assertIs(klass, DummyTask)
-            self.assertIs(coro_fn, DummyTask.dummy)
+        register('basic-task', 'mycoro')(BasicTaskHolder)
+        klass, coro_fn = TaskRegistry.get('basic-task')
+        self.assertIs(klass, BasicTaskHolder)
+        self.assertIs(coro_fn, BasicTaskHolder.mycoro)
 
 
 class TestNewTask(unittest.TestCase):
 
     """
-    Test new tasks are created as expected from registered Tukio tasks.
+    Test new tasks are created as expected from registered Tukio task names.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        # Save the initial state of `TaskRegistry`
+        cls._backup = _save_registry()
+        # Register all tasks used in the tests
+        register('my-task-holder', 'do_it')(MyTaskHolder)
+        register('my-coro-task')(my_coro_task)
+        register('task-bad-inputs', 'dummy')(BadInitTaskHolder1)
+        register('task-init-exc', 'dummy')(BadInitTaskHolder2)
+
+    @classmethod
+    def tearDownClass(cls):
+        # Await all dummy tasks created before test case complete to keep a
+        # clean output.
+        loop = asyncio.get_event_loop()
+        tasks = asyncio.Task.all_tasks(loop=loop)
+        loop.run_until_complete(asyncio.wait(tasks))
+        # Restore the initial state of `TaskRegistry`
+        _restore_registry(cls._backup)
 
     def test_new_task_ok(self):
         """
@@ -170,11 +244,12 @@ class TestNewTask(unittest.TestCase):
         """
         # Create a task from a task holder
         task = new_task('my-task-holder')
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
 
         # Create a task from a simple coroutine
         task = new_task('my-coro-task')
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
+
 
     def test_new_task_unknown(self):
         """
@@ -199,59 +274,35 @@ class TestNewTask(unittest.TestCase):
         Trying to create a new task from an invalid task holder may raise
         various exceptions. Ensure those exceptions are raised by `new_task`.
         """
-        # __init__ takes no arg/kwarg
-        class DummyTask1:
-            async def execute(self):
-                pass
+        # Cannot create a task with `__init__` has an  invalid signature
+        with self.assertRaisesRegex(TypeError, 'positional argument'):
+            new_task('task-bad-inputs', config={'hello': 'world'})
 
-        with _temp_registration():
-            register('dummy-task', 'execute')(DummyTask1)
-            with self.assertRaises(TypeError):
-                new_task('dummy-task', config={'hello': 'world'})
-
-        # __init__ takes two args
-        class DummyTask2:
-            def __init__(self, config, dummy):
-                pass
-            async def execute(self):
-                pass
-
-        with _temp_registration():
-            register('dummy-task', 'execute')(DummyTask2)
-            with self.assertRaises(TypeError):
-                new_task('dummy-task', config={'hello': 'world'})
-
-        # __init__ tries to perform an invalid operation on the config dict
-        class MyException(Exception):
-            pass
-
-        class DummyTask3:
-            def __init__(self, config):
-                raise MyException
-            async def execute(self):
-                pass
-
-        with _temp_registration():
-            register('dummy-task', 'execute')(DummyTask3)
-            with self.assertRaises(MyException):
-                new_task('dummy-task')
+        # Cannot create a task when `__init__` raises an exception
+        with self.assertRaises(MyDummyError):
+            new_task('task-init-exc')
 
 
 class TestTaskFactory(unittest.TestCase):
 
     """
-    Test the expected behaviors with and without the Tukio task factory set
-    in the event loop.
+    Test task creation with and without the Tukio task factory set in the event
+    loop
     """
 
     @classmethod
     def setUpClass(cls):
+        cls._backup = _save_registry()
+        register('dummy-holder', 'do_it')(MyTaskHolder)
+        register('basic-holder', 'mycoro')(BasicTaskHolder)
+        register('dummy-coro')(my_coro_task)
         cls.loop = asyncio.get_event_loop()
-        cls.holder = MyTaskHolder()
+        cls.holder = MyTaskHolder({'hello': 'world'})
+        cls.basic = BasicTaskHolder({'hello': 'world'})
 
     @classmethod
     def tearDownClass(cls):
-        cls.loop.close()
+        _restore_registry(cls._backup)
 
     def test_with_tukio_factory(self):
         """
@@ -263,19 +314,19 @@ class TestTaskFactory(unittest.TestCase):
 
         # Create and run a `TukioTask` from a registered task holder
         task = asyncio.ensure_future(self.holder.do_it())
-        self.assertTrue(isinstance(task, TukioTask))
+        self.assertIsInstance(task, TukioTask)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_TASK_HOLDER_RES)
 
         # Create and run a `TukioTask` from a registered coroutine
         task = asyncio.ensure_future(my_coro_task())
-        self.assertTrue(isinstance(task, TukioTask))
+        self.assertIsInstance(task, TukioTask)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_CORO_TASK_RES)
 
         # Run a regular coroutine
         task = asyncio.ensure_future(other_coro())
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, None)
 
@@ -284,18 +335,18 @@ class TestTaskFactory(unittest.TestCase):
         # generator object.
         t1 = asyncio.ensure_future(my_coro_task())
         t2 = asyncio.ensure_future(other_coro())
-        self.assertTrue(isinstance(t1, TukioTask))
-        self.assertTrue(isinstance(t2, asyncio.Task))
+        self.assertIsInstance(t1, TukioTask)
+        self.assertIsInstance(t2, asyncio.Task)
         gen = asyncio.wait([t1, t2])
         # A task is created inside `asyncio.run_until_complete` anyway...
         task = asyncio.ensure_future(gen)
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, ({t1, t2}, set()))
 
         # Tukio task factory does not affect futures passed to `ensure_future`
         future = asyncio.ensure_future(asyncio.Future())
-        self.assertTrue(isinstance(future, asyncio.Future))
+        self.assertIsInstance(future, asyncio.Future)
 
     def test_without_tukio_factory(self):
         """
@@ -308,19 +359,19 @@ class TestTaskFactory(unittest.TestCase):
 
         # Create and run a Tukio task implemented as a task holder
         task = asyncio.ensure_future(self.holder.do_it())
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_TASK_HOLDER_RES)
 
         # Create and run a Tukio task implemented as a coroutine
         task = asyncio.ensure_future(my_coro_task())
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_CORO_TASK_RES)
 
         # Create and run a regular `asyncio.Task`
         task = asyncio.ensure_future(other_coro())
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, None)
 
@@ -329,15 +380,49 @@ class TestTaskFactory(unittest.TestCase):
         # generator object.
         t1 = asyncio.ensure_future(my_coro_task())
         t2 = asyncio.ensure_future(other_coro())
-        self.assertTrue(isinstance(t1, asyncio.Task))
-        self.assertTrue(isinstance(t2, asyncio.Task))
+        self.assertIsInstance(t1, asyncio.Task)
+        self.assertIsInstance(t2, asyncio.Task)
         gen = asyncio.wait([t1, t2])
         # A task is created inside `asyncio.run_until_complete` anyway...
         task = asyncio.ensure_future(gen)
-        self.assertTrue(isinstance(task, asyncio.Task))
+        self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, ({t1, t2}, set()))
 
+    def test_tukio_task_attrs_from_coro(self):
+        """
+        Check `TukioTask` instances always have `.holder` and `.uid` attributes
+        when `tukio_factory` is set.
+        """
+        self.loop.set_task_factory(tukio_factory)
+
+        # Create a task from a simple coroutine
+        task = asyncio.ensure_future(my_coro_task())
+        self.assertTrue(hasattr(task, 'holder'))
+        self.assertTrue(hasattr(task, 'uid'))
+        self.assertIsNone(task.holder)
+        self.assertIsInstance(task.uid, str)
+        # uuid4() always returns a 36-chars long ID
+        self.assertEqual(len(task.uid), 36)
+
+        # Create a task from a task holder (inherited from `TaskHolder`)
+        task = asyncio.ensure_future(self.holder.do_it())
+        self.assertTrue(hasattr(task, 'holder'))
+        self.assertTrue(hasattr(task, 'uid'))
+        self.assertIs(task.holder, self.holder)
+        self.assertIsInstance(task.uid, str)
+        # uuid4() always returns a 36-chars long ID
+        self.assertEqual(len(task.uid), 36)
+        self.assertEqual(task.uid, task.holder.uid)
+
+        # Create a task from a basic task holder
+        task = asyncio.ensure_future(self.basic.mycoro())
+        self.assertTrue(hasattr(task, 'holder'))
+        self.assertTrue(hasattr(task, 'uid'))
+        self.assertIs(task.holder, self.basic)
+        self.assertIsInstance(task.uid, str)
+        # uuid4() always returns a 36-chars long ID
+        self.assertEqual(len(task.uid), 36)
 
 if __name__ == '__main__':
     unittest.main()
