@@ -2,7 +2,6 @@ import asyncio
 from datetime import datetime
 from enum import Enum
 import functools
-import inspect
 import logging
 from uuid import uuid4
 
@@ -333,6 +332,7 @@ class Workflow(asyncio.Future):
         # instances of `asyncio.Task`, and keys are instances of `TaskTemplate`
         self.tasks = set()
         self._tasks_by_id = dict()
+        self._tasks_disinherited = dict()
         self._done_tasks = set()
         self._internal_exc = None
         self._must_cancel = False
@@ -455,6 +455,15 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
+    def disinherit(self, task_id, heirs):
+        """
+        Will prevent these children from being executed when task is done.
+        """
+        log.debug('Disinherited: {heirs} task from {task}'.format(heirs=heirs, task=task_id))
+        if task_id not in self._tasks_disinherited:
+            self._tasks_disinherited[task_id] = set()
+        self._tasks_disinherited[task_id] |= set(heirs)
+
     def _join_task(self, task, result):
         """
         Pass data to a downstream task that has already been started (by
@@ -485,7 +494,14 @@ class Workflow(asyncio.Future):
             log.exception(exc)
         else:
             succ_tmpls = self._template.dag.successors(task_tmpl)
-            for succ_tmpl in succ_tmpls:
+            allowed_tmpls = [
+                heir
+                for heir
+                in succ_tmpls
+                if heir.uid not in self._tasks_disinherited.get(future.uid, set())
+            ]
+            log.debug('After disinheritance, children remaining {}'.format(allowed_tmpls))
+            for succ_tmpl in allowed_tmpls:
                 succ_task, _ = self._tasks_by_id.get(succ_tmpl.uid, (None, {}))
                 # Downstream task already running, join it!
                 if succ_task:
@@ -597,35 +613,3 @@ def new_workflow(wf_tmpl, running=None, loop=None):
     """
     policy_handler = OverrunPolicyHandler(wf_tmpl, loop=loop)
     return policy_handler.new_workflow(running)
-
-
-def unlock_workflow_when_done():
-    """
-    Adds a done callback to the current task so as to unlock the workflow that
-    handles its execution when the task gets done.
-    If no workflow linked to the task can be found, raise an exception.
-    It assumes all tasks scheduled from within a workflow object have at least
-    one done callback which is a bound method from the workflow object.
-
-    Note: bound methods from distinct workflow ojects in the task's
-    "call when done" list are not supported. It must never happen!
-    """
-    task = asyncio.Task.current_task()
-    for cb in task._callbacks:
-        # inspect.getcallargs() gives acces to the implicit 'self' arg of the
-        # bound method but it is marked as deprecated since Python 3.5.1
-        # and the new `inspect.Signature` object does do the job :((
-        if inspect.ismethod(cb):
-            inst = cb.__self__
-        elif isinstance(cb, functools.partial):
-            try:
-                inst = cb.func.__self__
-            except AttributeError:
-                continue
-        else:
-            continue
-        if isinstance(inst, Workflow):
-            task.add_done_callback(inst._unlock)
-            break
-    else:
-        raise WorkflowNotFoundError
