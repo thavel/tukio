@@ -332,7 +332,7 @@ class Workflow(asyncio.Future):
         # instances of `asyncio.Task`, and keys are instances of `TaskTemplate`
         self.tasks = set()
         self._tasks_by_id = dict()
-        self._tasks_disinherited = dict()
+        self._children_disabled = dict()
         self._done_tasks = set()
         self._internal_exc = None
         self._must_cancel = False
@@ -455,14 +455,14 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def disinherit(self, task_id, heirs):
+    def disable_children(self, task_id, children):
         """
         Will prevent these children from being executed when task is done.
         """
-        log.debug('Disinherited: {heirs} task from {task}'.format(heirs=heirs, task=task_id))
-        if task_id not in self._tasks_disinherited:
-            self._tasks_disinherited[task_id] = set()
-        self._tasks_disinherited[task_id] |= set(heirs)
+        log.debug('Disabled children for {task}: {children}'.format(children=children, task=task_id))
+        if task_id not in self._children_disabled:
+            self._children_disabled[task_id] = set()
+        self._children_disabled[task_id] |= set(children)
 
     def _join_task(self, task, result):
         """
@@ -495,12 +495,10 @@ class Workflow(asyncio.Future):
         else:
             succ_tmpls = self._template.dag.successors(task_tmpl)
             allowed_tmpls = [
-                heir
-                for heir
-                in succ_tmpls
-                if heir.uid not in self._tasks_disinherited.get(future.uid, set())
+                child for child in succ_tmpls
+                if child.uid not in self._children_disabled.get(future.uid, set())
             ]
-            log.debug('After disinheritance, children remaining {}'.format(allowed_tmpls))
+            log.debug('After disabled children, tasks remaining {}'.format(allowed_tmpls))
             for succ_tmpl in allowed_tmpls:
                 succ_task, _ = self._tasks_by_id.get(succ_tmpl.uid, (None, {}))
                 # Downstream task already running, join it!

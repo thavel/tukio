@@ -33,19 +33,19 @@ class WorkflowTest(TestCase):
         self.workflow = new_workflow(template)
 
     @ignore_loop
-    def test_001_disinherit(self):
-        assert_false(self.workflow._tasks_disinherited)
-        self.workflow.disinherit('001002003', ['toto'])
-        assert_equals(self.workflow._tasks_disinherited['001002003'], set(['toto']))
-        self.workflow.disinherit('001002003', ['toto', 'tata'])
-        assert_equals(self.workflow._tasks_disinherited['001002003'], set(['toto', 'tata']))
+    def test_001_disable_children(self):
+        assert_false(self.workflow._children_disabled)
+        self.workflow.disable_children('001002003', ['toto'])
+        assert_equals(self.workflow._children_disabled['001002003'], set(['toto']))
+        self.workflow.disable_children('001002003', ['toto', 'tata'])
+        assert_equals(self.workflow._children_disabled['001002003'], set(['toto', 'tata']))
 
     @ignore_loop
     @patch.object(Workflow, "_new_task")
     def test_002_start_dishinerited(self, mock):
         future = FakeTask()
         future.result = lambda :'ok'
-        self.workflow._tasks_disinherited[future.uid] = ['fake_2']
+        self.workflow._children_disabled[future.uid] = ['fake_2']
         template = self.workflow._template
         self.workflow._run_next_tasks(template.root(), future)
         assert_equals(mock.call_count, 1)

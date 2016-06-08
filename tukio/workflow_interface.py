@@ -52,10 +52,10 @@ class WorkflowInterface(object):
         """
         self.task.add_done_callback(inst._unlock)
 
-    def disinherit(self, heirs):
+    def disable_children(self, children):
         """
         prevent the workflow from running children of the current tasks
         """
-        log.info('disinheriting %s for %s' % (self, heirs))
+        log.info('disabling children %s from %s' % (children, self))
         log.warning(dir(self.task.holder))
-        self.workflow.disinherit(self.task.uid, heirs)
+        self.workflow.disable_children(self.task.uid, children)
