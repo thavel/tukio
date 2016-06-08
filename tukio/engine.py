@@ -43,22 +43,12 @@ class _WorkflowSelector:
     def __init__(self):
         self._selector = {Listen.everything: set()}
         self._templates = dict()
-        self._drafts = dict()
-
-    @property
-    def drafts(self):
-        return self._drafts
 
     def load(self, template):
         """
-        Loads a new workflow template in the selector. If a previous version
-        of this template was loaded, unload it first.
+        Loads a new workflow template in the selector. If the template is
+        already loaded, unloads it first.
         """
-        # Draft templates cannot be triggered on new data received.
-        if template.draft:
-            self._drafts[template.uid] = template
-            return
-
         # Cleanup the current template ID/topic associations before loading the
         # new template.
         try:
@@ -66,14 +56,7 @@ class _WorkflowSelector:
         except KeyError:
             pass
         else:
-            # A workflow template is uniquely defined by the tuple
-            # (template ID, version) but only a single version of template ID
-            # can be loaded.
-            # TODO: shouldn't we remove the version concept from Tukio?
-            if current.version > template.version:
-                raise LoadWorkflowError(template, current)
-            else:
-                self.unload(current.uid)
+            self.unload(current.uid)
         self._templates[template.uid] = template
 
         # Add new template ID/topic associations
@@ -87,18 +70,12 @@ class _WorkflowSelector:
                 except KeyError:
                     self._selector[topic] = {template}
 
-    def unload(self, tmpl_id, draft=False):
+    def unload(self, tmpl_id):
         """
         Unloads a workflow template from the selector. Raises a `KeyError`
         exception if the given template ID is not loaded.
-        If draft is True, tries to unload a draft template.
         """
-        if draft:
-            return self._drafts.pop(tmpl_id)
-
-        # Unload a regular template.
         template = self._templates.pop(tmpl_id)
-
         listen = template.listen
         if listen is Listen.everything:
             self._selector[Listen.everything].remove(template)
@@ -116,7 +93,6 @@ class _WorkflowSelector:
         empty list.
         """
         self._templates.clear()
-        self._drafts.clear()
         self._selector.clear()
         self._selector[Listen.everything] = set()
 
@@ -137,14 +113,11 @@ class _WorkflowSelector:
                 pass
         return list(templates)
 
-    def get(self, tmpl_id, draft=False):
+    def get(self, tmpl_id):
         """
-        Returns the workflow template with the given template ID. If draft is
-        True, tries to return a draft workflow template.
-        Raises a `KeyError` exception if no template is found.
+        Returns the workflow template with the given template ID. Raises a
+        `KeyError` exception if no template is found.
         """
-        if draft:
-            return self._drafts[tmpl_id]
         return self._templates[tmpl_id]
 
 
@@ -262,14 +235,14 @@ class Engine(asyncio.Future):
             for tmpl in templates:
                 await self._run_in_task(self._load, tmpl)
 
-    async def unload(self, template_id, draft=False):
+    async def unload(self, template_id):
         """
         Unloads a workflow template from the engine. Returns the template
         object if the template was found and actually unloaded, else raises
         a `KeyError` exception.
         """
         with await self._lock:
-            template = self._selector.unload(template_id, draft=draft)
+            template = self._selector.unload(template_id)
         return template
 
     async def data_received(self, data, topic=None):
@@ -311,7 +284,7 @@ class Engine(asyncio.Future):
         """
         running = self._running.get(template.uid)
         # Always apply the policy of the current workflow template (workflow
-        # instances may run with an old version of the template)
+        # instances may run with another version of the template)
         wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
             wflow.add_done_callback(self._remove_wflow)
@@ -336,20 +309,20 @@ class Engine(asyncio.Future):
         await asyncio.wait(others)
         callback()
 
-    def run(self, tmpl_id, inputs, draft=False):
+    def run(self, template, data):
         """
-        Starts a new execution of the workflow template identified by `tmpl_id`
-        regardless of the overrun policy and already running workflows.
+        Starts a new execution of the workflow template regardless of the
+        overrun policy and already running workflows.
+        Note: it does NOT load the workflow template in the engine.
         """
         if self._must_stop:
             log.debug("The engine is stopping, cannot run a new workflow from"
-                      "template id %s", tmpl_id)
+                      "template id %s", template.uid)
             return None
-        wf_tmpl = self._selector.get(tmpl_id, draft=draft)
-        wflow = new_workflow(wf_tmpl, loop=self._loop)
+        wflow = new_workflow(template, loop=self._loop)
         self._add_wflow(wflow)
         wflow.add_done_callback(self._remove_wflow)
-        wflow.run(inputs)
+        wflow.run(data)
         return wflow
 
     def cancel(self, exec_id):

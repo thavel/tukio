@@ -150,13 +150,8 @@ class WorkflowTemplate:
     It provides an API to easily build and update a consistent workflow.
     """
 
-    def __init__(self, title, uid=None, tags=None, version=None, policy=None,
-                 draft=False, topics=None):
-        self.title = title
-        self.tags = tags or []
+    def __init__(self, uid=None, policy=None, topics=None):
         self.uid = uid or str(uuid4())
-        self.version = int(version) if version is not None else 1
-        self.draft = draft
         self.topics = topics
         self.policy = OverrunPolicy.get(policy)
         self.dag = DAG()
@@ -218,10 +213,7 @@ class WorkflowTemplate:
         Build a new workflow description from the given dictionary.
         The dictionary takes the form of:
             {
-                "title": <workflow-title>,
                 "id": <workflow-uid>,
-                "version": <version>,
-                "tags": [<a-tag>, <another-tag>],
                 "topics": [<a-topic>, <another-topic>],
                 "policy": <policy>,
                 "tasks": [
@@ -235,7 +227,6 @@ class WorkflowTemplate:
                 }
             }
 
-        Only 'title' is mandatory to create a workflow template.
         See below the conditions applied to trigger a workflow according to the
         value of 'topics':
             {"topics": None}
@@ -249,13 +240,8 @@ class WorkflowTemplate:
             try to trigger a workflow when data is received by the engine in
             topics "blob" and "foo" only
         """
-        # 'title' is the only mandatory key
         wf_tmpl = cls(
-            wf_dict['title'],
             uid=wf_dict.get('id'),
-            tags=wf_dict.get('tags'),
-            version=wf_dict.get('version'),
-            draft=wf_dict.get('draft', False),
             policy=wf_dict.get('policy'),
             topics=wf_dict.get('topics')
         )
@@ -277,11 +263,7 @@ class WorkflowTemplate:
         template object.
         """
         wf_dict = {
-            "title": self.title,
             "id": self.uid,
-            "tags": self.tags,
-            "version": int(self.version),
-            "draft": self.draft,
             "policy": self.policy.value,
             "topics": self.topics,
             "tasks": [],
@@ -298,8 +280,7 @@ class WorkflowTemplate:
         """
         Returns a copy of the current instance of workflow template.
         """
-        wf_tmpl = WorkflowTemplate(self.title, uid=self.uid,
-                                   tags=self.tags, version=self.version)
+        wf_tmpl = WorkflowTemplate(uid=self.uid)
         wf_tmpl.dag = self.dag.copy()
         return wf_tmpl
 
@@ -332,8 +313,7 @@ class WorkflowTemplate:
         """
         Human readable string representation of a workflow template.
         """
-        wfstr = "<WorkflowTemplate title={}, uid={}, version={}>"
-        return wfstr.format(self.title, self.uid, self.version)
+        return "<WorkflowTemplate uid={}>".format(self.uid)
 
 
 class Workflow(asyncio.Future):
@@ -425,7 +405,7 @@ class Workflow(asyncio.Future):
         for topic in itertopics:
             try:
                 self._broker.unregister(callback, topic=topic)
-            except Exception as exc:
+            except KeyError as exc:
                 log.error('failed to unregister callback: %s', exc)
                 self._internal_exc = exc
         if self._internal_exc:
@@ -576,10 +556,9 @@ class Workflow(asyncio.Future):
         """
         Readable string representation of a workflow execution object.
         """
-        string = ("<Workflow template_id={}, template_title={}, uid={}, "
-                  "start={}, end={}>")
-        tmpl_id, title = self._template.uid, self._template.title
-        return string.format(tmpl_id, title, self.uid, self._start, self._end)
+        string = "<Workflow template.uid={}, uid={}, start={}, end={}>"
+        return string.format(self._template.uid, self.uid,
+                             self._start, self._end)
 
     def report(self):
         """
