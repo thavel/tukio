@@ -179,6 +179,13 @@ class Engine(asyncio.Future):
         """
         return self._selector
 
+    @property
+    def instances(self):
+        """
+        Returns the dict or running workflows
+        """
+        return self._running_by_id
+
     def _add_wflow(self, wflow):
         """
         Adds a new entry into the dict of running workflows and updates the
