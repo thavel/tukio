@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from tukio.task import (
     TaskHolder, register, tukio_factory, TukioTask, TaskRegistry,
-    UnknownTaskName, new_task
+    UnknownTaskName, new_task, TaskTemplate
 )
 
 
@@ -19,7 +19,7 @@ class MyTaskHolder(TaskHolder):
         self.config = config
         self.uid = str(uuid4())
 
-    async def do_it(self):
+    async def do_it(self, data):
         return MY_TASK_HOLDER_RES
 
 
@@ -243,13 +243,12 @@ class TestNewTask(unittest.TestCase):
         Various cases which must lead to create asyncio tasks successfully.
         """
         # Create a task from a task holder
-        task = new_task('my-task-holder')
+        task = new_task('my-task-holder', 'junk-data')
         self.assertIsInstance(task, asyncio.Task)
 
         # Create a task from a simple coroutine
         task = new_task('my-coro-task')
         self.assertIsInstance(task, asyncio.Task)
-
 
     def test_new_task_unknown(self):
         """
@@ -262,12 +261,15 @@ class TestNewTask(unittest.TestCase):
     def test_new_task_bad_inputs(self):
         """
         Trying to create a new asyncio task with invalid inputs must raise
-        a `ValueError` exception.
-
-        XXX: see TODO in the code!
+        a `TypeError` exception.
         """
-        with self.assertRaisesRegex(ValueError, 'too many values to unpack'):
-            new_task('my-coro-task', inputs='dummy')
+        # No data as argument whereas the coroutine expects 1 positional arg
+        with self.assertRaisesRegex(TypeError, 'positional argument'):
+            new_task('my-task-holder')
+
+        # Two positional args whereas the coroutine expects only 1
+        with self.assertRaisesRegex(TypeError, 'positional argument'):
+            new_task('my-task-holder', 'one', 'two')
 
     def test_new_task_bad_holder(self):
         """
@@ -313,7 +315,7 @@ class TestTaskFactory(unittest.TestCase):
         self.loop.set_task_factory(tukio_factory)
 
         # Create and run a `TukioTask` from a registered task holder
-        task = asyncio.ensure_future(self.holder.do_it())
+        task = asyncio.ensure_future(self.holder.do_it('yopla'))
         self.assertIsInstance(task, TukioTask)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_TASK_HOLDER_RES)
@@ -358,7 +360,7 @@ class TestTaskFactory(unittest.TestCase):
         self.loop.set_task_factory(None)
 
         # Create and run a Tukio task implemented as a task holder
-        task = asyncio.ensure_future(self.holder.do_it())
+        task = asyncio.ensure_future(self.holder.do_it('bar'))
         self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_TASK_HOLDER_RES)
@@ -406,7 +408,7 @@ class TestTaskFactory(unittest.TestCase):
         self.assertEqual(len(task.uid), 36)
 
         # Create a task from a task holder (inherited from `TaskHolder`)
-        task = asyncio.ensure_future(self.holder.do_it())
+        task = asyncio.ensure_future(self.holder.do_it('foo'))
         self.assertTrue(hasattr(task, 'holder'))
         self.assertTrue(hasattr(task, 'uid'))
         self.assertIs(task.holder, self.holder)
@@ -423,6 +425,167 @@ class TestTaskFactory(unittest.TestCase):
         self.assertIsInstance(task.uid, str)
         # uuid4() always returns a 36-chars long ID
         self.assertEqual(len(task.uid), 36)
+
+
+class TestTaskTemplate(unittest.TestCase):
+
+    """
+    Task templates are simple objects that must basically load and dump.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._backup = _save_registry()
+        register('my-task-holder', 'do_it')(MyTaskHolder)
+        register('basic-holder', 'mycoro')(BasicTaskHolder)
+        register('dummy-coro')(my_coro_task)
+        cls.loop = asyncio.get_event_loop()
+        cls.holder = MyTaskHolder({'hello': 'world'})
+        cls.basic = BasicTaskHolder({'hello': 'world'})
+
+    @classmethod
+    def tearDownClass(cls):
+        # Await all dummy tasks created before test case complete to keep a
+        # clean output.
+        loop = asyncio.get_event_loop()
+        tasks = asyncio.Task.all_tasks(loop=loop)
+        loop.run_until_complete(asyncio.wait(tasks))
+        _restore_registry(cls._backup)
+
+    def test_new_template(self):
+        """
+        Valid new task template operations
+        """
+        # The simplest case: only a name is required
+        # Note: task name is not checked!
+        name = 'dummy'
+        task_tmpl = TaskTemplate(name)
+        self.assertEqual(task_tmpl.name, name)
+        self.assertIsNone(task_tmpl.config)
+        self.assertIsNone(task_tmpl.topics)
+        # Even if no ID is provided, it must be generated
+        self.assertIsInstance(task_tmpl.uid, str)
+        self.assertEqual(len(task_tmpl.uid), 36)
+
+    def test_new_task(self):
+        """
+        Can create new asyncio tasks from the task template
+        """
+        self.loop.set_task_factory(tukio_factory)
+
+        # Create a task from a registered task holder
+        task_tmpl = TaskTemplate('my-task-holder')
+        task = task_tmpl.new_task('dummy-data', loop=self.loop)
+        self.assertIsInstance(task, TukioTask)
+
+        # Also works with a registered coroutine
+        task_tmpl = TaskTemplate('dummy-coro')
+        task = task_tmpl.new_task(loop=self.loop)
+        self.assertIsInstance(task, TukioTask)
+
+    def test_new_task_unknown(self):
+        """
+        Trying to create a new task with an unknown name must raise a
+        `UnknownTaskName` exception.
+        """
+        task_tmpl = TaskTemplate('dummy')
+        with self.assertRaises(UnknownTaskName):
+            task_tmpl.new_task()
+
+    def test_new_task_bad_args(self):
+        """
+        Trying to create a new task with invalid arguments must raise a
+        `TypeError` exception.
+        """
+        # Missing argument
+        task_tmpl = TaskTemplate('my-task-holder')
+        with self.assertRaisesRegex(TypeError, 'positional argument'):
+            task_tmpl.new_task()
+
+        # Too many arguments
+        task_tmpl = TaskTemplate('dummy-coro')
+        with self.assertRaisesRegex(TypeError, 'positional argument'):
+            task_tmpl.new_task('junk')
+
+    def test_build_from_dict(self):
+        """
+        Create a new task template from a dictionary
+        """
+        task_dict = {
+            "id": "1234",
+            "name": "dummy"
+        }
+        task_tmpl = TaskTemplate.from_dict(task_dict)
+        self.assertIsInstance(task_tmpl, TaskTemplate)
+        self.assertEqual(task_tmpl.uid, '1234')
+        self.assertEqual(task_tmpl.name, 'dummy')
+        self.assertIsNone(task_tmpl.topics)
+        self.assertIsNone(task_tmpl.config)
+
+        # Can also create a task template without ID defined in the dict
+        task_dict = {
+            "name": "dummy",
+            "topics": ["yummy"],
+            "config": {"hello": "world"},
+            "foo": None,
+            "bar": [1, 2, 3, 4]
+        }
+        task_tmpl = TaskTemplate.from_dict(task_dict)
+        self.assertIsInstance(task_tmpl, TaskTemplate)
+        # Even if no ID is provided, it must be generated
+        self.assertIsInstance(task_tmpl.uid, str)
+        self.assertEqual(len(task_tmpl.uid), 36)
+        self.assertEqual(task_tmpl.name, 'dummy')
+        self.assertEqual(task_tmpl.topics, ["yummy"])
+        self.assertEqual(task_tmpl.config, {"hello": "world"})
+
+        # Additional keys in the dict don't harm
+        task_dict = {
+            "name": "dummy",
+            "foo": None,
+            "bar": [1, 2, 3, 4]
+        }
+        task_tmpl = TaskTemplate.from_dict(task_dict)
+        self.assertIsInstance(task_tmpl, TaskTemplate)
+        # Even if no ID is provided, it must be generated
+        self.assertIsInstance(task_tmpl.uid, str)
+        self.assertEqual(len(task_tmpl.uid), 36)
+        self.assertEqual(task_tmpl.name, 'dummy')
+        self.assertIsNone(task_tmpl.topics)
+        self.assertIsNone(task_tmpl.config)
+
+    def test_build_from_dict_without_name(self):
+        """
+        The only required argument to create a task template is the task
+        name.
+        """
+        task_dict = {
+            "id": "1234",
+        }
+        with self.assertRaises(KeyError):
+            TaskTemplate.from_dict(task_dict)
+
+    def test_dump_as_dict(self):
+        """
+        A TaskTemplate instance can be dumped as a dictionary
+        """
+        task_tmpl = TaskTemplate('my-task-holder', config={'hello': 'world'})
+        task_tmpl.topics = ['my-topic']
+
+        expected_dict = {
+            "name": "my-task-holder",
+            "topics": ["my-topic"],
+            "config": {'hello': 'world'}
+        }
+
+        task_dict = task_tmpl.as_dict()
+        del task_dict['id']
+        self.assertEqual(task_dict, expected_dict)
+
+        # The dumped dict must be loadable by the `from_dict()` classmethod
+        other_tmpl = TaskTemplate.from_dict(task_dict)
+        self.assertIsInstance(other_tmpl, TaskTemplate)
+
 
 if __name__ == '__main__':
     unittest.main()

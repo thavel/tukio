@@ -79,16 +79,13 @@ def register(task_name, coro_name=None):
     return decorator
 
 
-def new_task(task_name, inputs=((), {}), config=None, loop=None):
+def new_task(task_name, *args, config=None, loop=None, **kwargs):
     """
     Schedules the execution of the coroutine registered as `task_name` (either
     defined in a task holder class or not) in the loop and returns an instance
     of `asyncio.Task()` (or a subclass of it).
     """
     klass, coro_fn = TaskRegistry.get(task_name)
-    # TODO: don't try to unpack arguments, and pass inputs as is to
-    # the coroutine
-    args, kwargs = inputs
     if klass:
         task_holder = klass(config)
         coro = coro_fn(task_holder, *args, **kwargs)
