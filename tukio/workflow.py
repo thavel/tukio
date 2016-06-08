@@ -332,7 +332,7 @@ class Workflow(asyncio.Future):
         # instances of `asyncio.Task`, and keys are instances of `TaskTemplate`
         self.tasks = set()
         self._tasks_by_id = dict()
-        self._children_disabled = dict()
+        self._children_active = dict()
         self._done_tasks = set()
         self._internal_exc = None
         self._must_cancel = False
@@ -455,14 +455,29 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def disable_children(self, task_id, children):
+    def disable_children(self, task_id, children, enable_others=False):
         """
         Will prevent these children from being executed when task is done.
         """
-        log.debug('Disabled children for {task}: {children}'.format(children=children, task=task_id))
-        if task_id not in self._children_disabled:
-            self._children_disabled[task_id] = set()
-        self._children_disabled[task_id] |= set(children)
+        log.debug('Disabled children for %s: %s', children, task_id)
+        if task_id not in self._children_active:
+            self._children_active[task_id] = {None: True}
+        if enable_others:
+            self._children_active[task_id] = {None: True}
+        for child in children:
+            self._children_active[task_id][child] = False
+
+    def enable_children(self, task_id, children, disable_others=False):
+        """
+        Will prevent these children from being executed when task is done.
+        """
+        log.debug('Disabled children for %s: %s', children, task_id)
+        if task_id not in self._children_active:
+            self._children_active[task_id] = {None: True}
+        if disable_others:
+            self._children_active[task_id] = {None: False}
+        for child in children:
+            self._children_active[task_id][child] = True
 
     def _join_task(self, task, result):
         """
@@ -494,11 +509,12 @@ class Workflow(asyncio.Future):
             log.exception(exc)
         else:
             succ_tmpls = self._template.dag.successors(task_tmpl)
+            task_children = self._children_active.get(future.uid, {None: True})
             allowed_tmpls = [
                 child for child in succ_tmpls
-                if child.uid not in self._children_disabled.get(future.uid, set())
+                if task_children.get(child.uid, task_children[None])
             ]
-            log.debug('After disabled children, tasks remaining {}'.format(allowed_tmpls))
+            log.debug('Active children: %s', allowed_tmpls)
             for succ_tmpl in allowed_tmpls:
                 succ_task, _ = self._tasks_by_id.get(succ_tmpl.uid, (None, {}))
                 # Downstream task already running, join it!

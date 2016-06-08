@@ -51,9 +51,18 @@ class WorkflowInterface(object):
         """
         self.task.add_done_callback(self.workflow.unlock)
 
-    def disable_children(self, children):
+    def disable_children(self, children, enable_others=False):
         """
         prevent the workflow from running children of the current task
+        if enable_others, all non mentioned task will be enabled
         """
         log.debug('disabling children %s from %s' % (children, self))
-        self.workflow.disable_children(self.task.uid, children)
+        self.workflow.disable_children(self.task.uid, children, enable_others)
+
+    def enable_children(self, children, disable_others=False):
+        """
+        ask these children to be run at the end of the task.
+        if disable_others, all non montioned task will be disabled
+        """
+        log.debug('enabling children %s from %s' % (children, self))
+        self.workflow.enable_children(self.task.uid, children, disable_others)
