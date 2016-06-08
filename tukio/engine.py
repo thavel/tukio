@@ -166,6 +166,13 @@ class Engine(asyncio.Future):
             del self._running[wflow.template.uid]
         del self._running_by_id[wflow.uid]
         log.debug('workflow removed from the running list: %s', wflow)
+
+        try:
+            wflow.result()
+        except Exception as exc:
+            log.warning('workflow %s ended on exception', wflow)
+            log.exception(exc)
+
         if self._must_stop and not self._running and not self.done():
             self.set_result(None)
             log.debug('no more workflow running, engine stopped')
