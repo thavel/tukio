@@ -49,7 +49,7 @@ class WorkflowInterface(object):
         Note: bound methods from distinct workflow ojects in the task's
         "call when done" list are not supported. It must never happen!
         """
-        self.task.add_done_callback(self.workflow._unlock)
+        self.task.add_done_callback(self.workflow.unlock)
 
     def disable_children(self, children):
         """

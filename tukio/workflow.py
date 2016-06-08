@@ -352,7 +352,7 @@ class Workflow(asyncio.Future):
     def policy(self):
         return self._template.policy
 
-    def _unlock(self, _):
+    def unlock(self, _):
         """
         A done callback to unlock the workflow.
         The concept of 'locked workflow' only applies when the overrun policy
