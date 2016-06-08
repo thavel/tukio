@@ -11,16 +11,14 @@ log = logging.getLogger(__name__)
 
 class WorkflowInterface(object):
 
-    workflow = None
-    task = None
+    def __init__(self, task=None):
+        self.task = task or asyncio.Task.current_task()
+        self.workflow = self.get_workflow(self.task)
 
-    def __init__(self):
-        self.get_workflow()
-
-    def get_workflow(self):
-        self.task = asyncio.Task.current_task()
-
-        for cb in self.task._callbacks:
+    @classmethod
+    def get_workflow(cls, task):
+        workflow = None
+        for cb in task._callbacks:
             # inspect.getcallargs() gives acces to the implicit 'self' arg of the
             # bound method but it is marked as deprecated since Python 3.5.1
             # and the new `inspect.Signature` object does do the job :((
@@ -34,10 +32,11 @@ class WorkflowInterface(object):
             else:
                 continue
             if isinstance(inst, Workflow):
-                self.workflow = inst
+                workflow = inst
 
-            if self.workflow is None:
+            if workflow is None:
                 raise WorkflowNotFoundError
+            return workflow
 
     def unlock_workflow_when_done(self):
         """
@@ -50,12 +49,11 @@ class WorkflowInterface(object):
         Note: bound methods from distinct workflow ojects in the task's
         "call when done" list are not supported. It must never happen!
         """
-        self.task.add_done_callback(inst._unlock)
+        self.task.add_done_callback(self.workflow._unlock)
 
     def disable_children(self, children):
         """
-        prevent the workflow from running children of the current tasks
+        prevent the workflow from running children of the current task
         """
-        log.info('disabling children %s from %s' % (children, self))
-        log.warning(dir(self.task.holder))
+        log.debug('disabling children %s from %s' % (children, self))
         self.workflow.disable_children(self.task.uid, children)
