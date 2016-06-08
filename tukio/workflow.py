@@ -7,7 +7,7 @@ import logging
 from uuid import uuid4
 
 from tukio.dag import DAG
-from tukio.task import TaskTemplate, TaskRegistry
+from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName
 from tukio.utils import FutureState, Listen
 from tukio.broker import get_broker
 
@@ -436,7 +436,7 @@ class Workflow(asyncio.Future):
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
-        except Exception as exc:
+        except (UnknownTaskName, TypeError, ValueError) as exc:
             log.error('failed to create task %s: raised %s', task_tmpl, exc)
             self._internal_exc = exc
             self._cancel_all_tasks()
