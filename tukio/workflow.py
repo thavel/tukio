@@ -428,6 +428,7 @@ class Workflow(asyncio.Future):
         # The workflow may fail to start at once
         if not task:
             self._try_mark_done()
+        return task
 
     def _new_task(self, task_tmpl, data):
         """
@@ -495,9 +496,9 @@ class Workflow(asyncio.Future):
             return succ_tmpls
         filtered_tmpls = []
         for tid in tmpl_ids:
-            for task_tmpl in succ_tmpls:
-                if task_tmpl.uid == tid:
-                    filtered_tmpls.append(task_tmpl)
+            for tmpl in succ_tmpls:
+                if tmpl.uid == tid:
+                    filtered_tmpls.append(tmpl)
                     break
             else:
                 # This is a misconfiguration from the task. Ignore it to
@@ -679,7 +680,7 @@ class WorkflowInterface:
         raise WorkflowNotFoundError
 
     @classmethod
-    def get_interface(cls):
+    def from_current_task(cls):
         """
         Returns an instance of `WorkflowInterface` from the current task.
         """
