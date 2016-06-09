@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from enum import Enum
 import functools
+import inspect
 import logging
 from uuid import uuid4
 
@@ -328,11 +329,14 @@ class Workflow(asyncio.Future):
         self._template = wf_tmpl
         # Start and end datetime (UTC) of the execution of the workflow
         self._start, self._end = None, None
-        # Dict of tasks executed at some point. The values of that dict are
-        # instances of `asyncio.Task`, and keys are instances of `TaskTemplate`
+        # Set of tasks executed at some point. Items of that set are
+        # instances of `asyncio.Task`
         self.tasks = set()
         self._tasks_by_id = dict()
-        self._children_active = dict()
+        # This dict references all tasks that updated the set of their
+        # downstream tasks at runtime. Keys are `asyncio.Task` objects and
+        # values are sets of task template IDs.
+        self._updated_next_tasks = dict()
         self._done_tasks = set()
         self._internal_exc = None
         self._must_cancel = False
@@ -354,10 +358,9 @@ class Workflow(asyncio.Future):
 
     def unlock(self, _):
         """
-        A done callback to unlock the workflow.
         The concept of 'locked workflow' only applies when the overrun policy
-        is set to 'skip-until-unlock'. Once a task has unlocked the workflow,
-        new execution with the same template can be triggered.
+        is set to 'skip-until-unlock'. Once the workflow is unlocked, a new
+        execution from the same template ID can be triggered.
         """
         if self.lock.locked():
             self.lock.release()
@@ -437,7 +440,7 @@ class Workflow(asyncio.Future):
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
         except (UnknownTaskName, TypeError, ValueError) as exc:
-            log.error('failed to create task %s: raised %s', task_tmpl, exc)
+            log.error('failed to create task from template: %s', task_tmpl)
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
@@ -455,47 +458,60 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def disable_children(self, task_id, children, enable_others=False):
-        """
-        Will prevent these children from being executed when task is done.
-        """
-        log.debug('Disabled children for %s: %s', children, task_id)
-        if task_id not in self._children_active:
-            self._children_active[task_id] = {None: True}
-        if enable_others:
-            self._children_active[task_id] = {None: True}
-        for child in children:
-            self._children_active[task_id][child] = False
-
-    def enable_children(self, task_id, children, disable_others=False):
-        """
-        Will prevent these children from being executed when task is done.
-        """
-        log.debug('Disabled children for %s: %s', children, task_id)
-        if task_id not in self._children_active:
-            self._children_active[task_id] = {None: True}
-        if disable_others:
-            self._children_active[task_id] = {None: False}
-        for child in children:
-            self._children_active[task_id][child] = True
-
     def _join_task(self, task, result):
         """
         Pass data to a downstream task that has already been started (by
         another parent). In such a situation, it is known to be a join task.
         """
         try:
-            # `data_received()` must be as simple callback (not a coroutine)
+            # `data_received()` must be a simple callback (not a coroutine)
             task.holder.data_received(result, from_parent=True)
         except AttributeError as exc:
-            raise Exception("No holder on task %s", task) from exc
+            self._internal_exc = exc
+            self._cancel_all_tasks()
+            return False
+        return True
 
-    def _run_next_tasks(self, task_tmpl, future):
+    def _set_next_task_templates(self, task, next_tmpl_ids):
+        """
+        Defines the set of downstream tasks that should be executed right after
+        `task`. This method is intended to be called at runtime by the task
+        itself. `next_tmpl_ids` must be a list (can be empty) of task template
+        IDs.
+        It may be used to dynamically update (at runtime) the tasks that will
+        be executed by the workflow after `task`.
+        """
+        self._updated_next_tasks[task] = next_tmpl_ids
+
+    def _get_next_task_templates(self, task_tmpl, task):
+        """
+        Retrieves the downstream tasks of `task_tmpl` and filters it with the
+        template IDs that (may) have been provided at runtime by `task`.
+        """
+        succ_tmpls = self._template.dag.successors(task_tmpl)
+        try:
+            tmpl_ids = self._updated_next_tasks[task]
+        except KeyError:
+            return succ_tmpls
+        filtered_tmpls = []
+        for tid in tmpl_ids:
+            for task_tmpl in succ_tmpls:
+                if task_tmpl.uid == tid:
+                    filtered_tmpls.append(task_tmpl)
+                    break
+            else:
+                # This is a misconfiguration from the task. Ignore it to
+                # leave the opportunity to execute the other next tasks.
+                log.error('ID %s not in downstream tasks of %s', tid, task)
+        log.debug('%s filtered next tasks to: %s', task, filtered_tmpls)
+        return filtered_tmpls
+
+    def _run_next_tasks(self, task_tmpl, task):
         """
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
         """
-        self._done_tasks.add(future)
+        self._done_tasks.add(task)
         if self._must_cancel:
             self._try_mark_done()
             return
@@ -503,27 +519,23 @@ class Workflow(asyncio.Future):
         # (may include task cancellation) but don't stop executing the other
         # branches of the workflow.
         try:
-            result = future.result()
+            result = task.result()
         except Exception as exc:
             log.warning('task %s ended on exception', task_tmpl)
             log.exception(exc)
         else:
-            succ_tmpls = self._template.dag.successors(task_tmpl)
-            task_children = self._children_active.get(future.uid, {None: True})
-            allowed_tmpls = [
-                child for child in succ_tmpls
-                if task_children.get(child.uid, task_children[None])
-            ]
-            log.debug('Active children: %s', allowed_tmpls)
-            for succ_tmpl in allowed_tmpls:
-                succ_task, _ = self._tasks_by_id.get(succ_tmpl.uid, (None, {}))
+            next_tmpls = self._get_next_task_templates(task_tmpl, task)
+            for tmpl in next_tmpls:
+                next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
                 # Downstream task already running, join it!
-                if succ_task:
-                    self._join_task(succ_task, result)
+                if next_task:
+                    joined = self._join_task(next_task, result)
+                    if not joined:
+                        break
                 # Create new task
                 else:
-                    succ_task = self._new_task(succ_tmpl, result)
-                if not succ_task:
+                    next_task = self._new_task(tmpl, result)
+                if not next_task:
                     break
         finally:
             self._try_mark_done()
@@ -627,3 +639,63 @@ def new_workflow(wf_tmpl, running=None, loop=None):
     """
     policy_handler = OverrunPolicyHandler(wf_tmpl, loop=loop)
     return policy_handler.new_workflow(running)
+
+
+class WorkflowInterface:
+
+    """
+    An object intended to be used from within tasks at runtime. It provides
+    methods to interact with the `Workflow` instance that is controlling the
+    task.
+    """
+
+    def __init__(self, task):
+        self.task = task
+        self._workflow = self._get_workflow(self.task)
+
+    def _get_workflow(self, task):
+        """
+        Looks for an instance of `Workflow` among the done callbacks of the
+        asyncio task. Raises a `WorkflowNotFoundError` if not found.
+        If the task was triggered from within a workflow it MUST have at least
+        one done callback that references the workflow itself.
+        """
+        for cb in task._callbacks:
+            # inspect.getcallargs() gives access to the implicit 'self' arg of
+            # the bound method but it is marked as deprecated since
+            # Python 3.5.1 and the new `inspect.Signature` object does NOT do
+            # the job :((
+            if inspect.ismethod(cb):
+                inst = cb.__self__
+            elif isinstance(cb, functools.partial):
+                try:
+                    inst = cb.func.__self__
+                except AttributeError:
+                    continue
+            else:
+                continue
+            if isinstance(inst, Workflow):
+                return inst
+        raise WorkflowNotFoundError
+
+    @classmethod
+    def get_interface(cls):
+        """
+        Returns an instance of `WorkflowInterface` from the current task.
+        """
+        return cls(asyncio.Task.current_task())
+
+    def unlock_when_done(self):
+        """
+        Adds a done callback to the current task so as to unlock the workflow
+        that handles its execution when the task gets done.
+        """
+        self.task.add_done_callback(self._workflow.unlock)
+
+    def set_next_tasks(self, task_ids):
+        """
+        By default the workflow runs all downstream tasks once the current task
+        is done. This method allows to select the tasks that will be actually
+        ran and disables other tasks (unless they're already running).
+        """
+        self._workflow._set_next_task_templates(self.task, task_ids)

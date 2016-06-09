@@ -38,9 +38,6 @@ class TaskHolder:
     If the task holder instance has a `uid` attribute it will be used by
     `TukioTask` as its own task ID (requires to use `tukio_factory` as the task
     factory).
-    A task may call `WorkflowInterface.disable_children([child1, child, 6])`
-    to prevent some of it's children from being executed.
-    children should be found in task configuration
     """
 
     TASK_NAME = None
