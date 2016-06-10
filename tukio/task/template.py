@@ -19,7 +19,7 @@ class TaskTemplate:
 
     def __init__(self, name, uid=None, config=None, topics=None):
         self.name = name
-        self.config = config
+        self.config = config or {}
         self.topics = topics
         self.uid = uid or str(uuid4())
 
@@ -61,7 +61,7 @@ class TaskTemplate:
         """
         uid = task_dict.get('id')
         name = task_dict['name']
-        config = task_dict.get('config')
+        config = task_dict.get('config', {})
         topics = task_dict.get('topics')
         return cls(name, uid=uid, config=config, topics=topics)
 

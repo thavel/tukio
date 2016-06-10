@@ -461,7 +461,7 @@ class TestTaskTemplate(unittest.TestCase):
         name = 'dummy'
         task_tmpl = TaskTemplate(name)
         self.assertEqual(task_tmpl.name, name)
-        self.assertIsNone(task_tmpl.config)
+        self.assertEqual(task_tmpl.config, {})
         self.assertIsNone(task_tmpl.topics)
         # Even if no ID is provided, it must be generated
         self.assertIsInstance(task_tmpl.uid, str)
@@ -520,7 +520,7 @@ class TestTaskTemplate(unittest.TestCase):
         self.assertEqual(task_tmpl.uid, '1234')
         self.assertEqual(task_tmpl.name, 'dummy')
         self.assertIsNone(task_tmpl.topics)
-        self.assertIsNone(task_tmpl.config)
+        self.assertEqual(task_tmpl.config, {})
 
         # Can also create a task template without ID defined in the dict
         task_dict = {
@@ -552,7 +552,7 @@ class TestTaskTemplate(unittest.TestCase):
         self.assertEqual(len(task_tmpl.uid), 36)
         self.assertEqual(task_tmpl.name, 'dummy')
         self.assertIsNone(task_tmpl.topics)
-        self.assertIsNone(task_tmpl.config)
+        self.assertEqual(task_tmpl.config, {})
 
     def test_build_from_dict_without_name(self):
         """
