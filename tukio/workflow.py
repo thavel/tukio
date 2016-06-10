@@ -20,6 +20,7 @@ class WorkflowError(Exception):
 
 
 class WorkflowRootTaskError(WorkflowError):
+
     def __init__(self, value):
         self._value = value
 
@@ -28,8 +29,18 @@ class WorkflowRootTaskError(WorkflowError):
 
 
 class WorkflowNotFoundError(WorkflowError):
+
     def __str__(self):
         return 'no workfow bound to the task, cannot unlock it!'
+
+
+class TemplateGraphError(Exception):
+
+    def __init__(self, key):
+        self._key = key
+
+    def __str__(self):
+        return 'graph error on task id: {}'.format(self._key)
 
 
 class OverrunPolicy(Enum):
@@ -245,16 +256,24 @@ class WorkflowTemplate:
             policy=wf_dict.get('policy'),
             topics=wf_dict.get('topics')
         )
+
+        # Tasks
         task_ids = dict()
         for task_dict in wf_dict.get('tasks', []):
             task_tmpl = TaskTemplate.from_dict(task_dict)
             wf_tmpl.add(task_tmpl)
             task_ids[task_tmpl.uid] = task_tmpl
-        for up_id, down_ids_set in wf_dict.get('graph', {}).items():
-            up_tmpl = task_ids[up_id]
-            for down_id in down_ids_set:
-                down_tmpl = task_ids[down_id]
-                wf_tmpl.link(up_tmpl, down_tmpl)
+
+        # Graph
+        try:
+            for up_id, down_ids_set in wf_dict.get('graph', {}).items():
+                up_tmpl = task_ids[up_id]
+                for down_id in down_ids_set:
+                    down_tmpl = task_ids[down_id]
+                    wf_tmpl.link(up_tmpl, down_tmpl)
+        except KeyError as exc:
+            raise TemplateGraphError(exc.args[0]) from exc
+
         return wf_tmpl
 
     def as_dict(self):
