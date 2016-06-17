@@ -172,27 +172,3 @@ class DAG(object):
         dag = DAG()
         dag.graph = graph
         return dag
-
-
-if __name__ == '__main__':
-    # a, b, c = object(), object(), object()
-    # d, e, f = object(), object(), object()
-    # mygraph = {
-    #     a: [b],
-    #     b: [c, d, e],
-    #     c: [e],
-    #     d: [e],
-    #     e: [],
-    #     f: []
-    # }
-    mygraph = {
-        'A': ['B'],
-        'B': ['C', 'D', 'E'],
-        'C': ['E'],
-        'D': ['E'],
-        'E': [],
-        'F': []
-    }
-    mydag = DAG.from_dict(mygraph)
-    print("root nodes are: {}".format(mydag.root_nodes()))
-    print("DAG is ok: {}".format(mydag.graph))
