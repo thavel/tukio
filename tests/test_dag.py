@@ -23,6 +23,13 @@ class TestDAG(TestCase):
         # Cyclic graph
         with self.assertRaises(DAGValidationError):
             DAG.from_dict({'t1': ['t1']})
+        with self.assertRaises(DAGValidationError):
+            DAG.from_dict({
+                't1': ['t2'],
+                't2': ['t3'],
+                't3': ['t4', 't1'],
+                't4': []
+            })
 
         # No list for successors
         with self.assertRaises(TypeError):
