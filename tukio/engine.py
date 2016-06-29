@@ -248,16 +248,13 @@ class Engine(asyncio.Future):
         else:
             log.debug("data received '%s' (no topic)", data)
         self._broker.dispatch(data, topic)
-        # Don't start new workflow instances if `stop()` was called.
-        if self._must_stop:
-            return
         with await self._lock:
             templates = self._selector.select(topic)
             # Try to trigger new workflows from the current dict of workflow
             # templates at all times!
             wflows = []
             for tmpl in templates:
-                wflow = await self._run_in_task(self._try_run, tmpl, data)
+                wflow = await self._run_in_task(self.run, tmpl, data)
                 if wflow:
                     wflows.append(wflow)
         return wflows
@@ -269,11 +266,24 @@ class Engine(asyncio.Future):
         self._add_wflow(wflow)
         wflow.run(data)
 
-    def _try_run(self, template, data):
+    def run(self, template, data):
         """
         Try to run a new instance of workflow defined by `tmpl_id` according to
         the instances already running and the overrun policy.
         """
+        # Don't start new workflow instances if `stop()` was called.
+        if self._must_stop:
+            log.debug("The engine is stopping, cannot run a new workflow from"
+                      "template id %s", template.uid)
+            return
+
+        # Do nothing if the template is not loaded
+        try:
+            self._selector.get(template.uid)
+        except KeyError:
+            log.error('Template %s is not loaded', template.uid)
+            return
+
         running = self._running.get(template.uid)
         # Always apply the policy of the current workflow template (workflow
         # instances may run with another version of the template)
@@ -301,7 +311,7 @@ class Engine(asyncio.Future):
         await asyncio.wait(others)
         callback()
 
-    def run(self, template, data):
+    def side_run(self, template, data):
         """
         Starts a new execution of the workflow template regardless of the
         overrun policy and already running workflows.
