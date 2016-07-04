@@ -6,10 +6,12 @@ from .task import TaskRegistry
 
 
 class TukioTask(asyncio.Task):
+
     """
     A simple subclass of `asyncio.Task()` to add an execution ID and optionally
     bind a task holder class.
     """
+
     def __init__(self, coro, *, loop=None):
         super().__init__(coro, loop=loop)
         self.holder = inspect.getcoroutinelocals(coro).get('self')
@@ -26,7 +28,8 @@ def tukio_factory(loop, coro):
     for all others.
     """
     try:
-        _ = TaskRegistry.codes()[coro.cr_code]
+        # Trigger exception if not valid
+        TaskRegistry.codes()[coro.cr_code]
         task = TukioTask(coro, loop=loop)
     except (KeyError, AttributeError):
         # When the coroutine is not a registered Tukio task or when `coro` is a

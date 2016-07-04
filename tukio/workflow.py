@@ -44,6 +44,17 @@ class TemplateGraphError(Exception):
         return 'graph error on task id: {}'.format(self._key)
 
 
+class WorkflowEvent(Enum):
+
+    task_create = 'TASK_CREATE'
+    task_update = 'TASK_UPDATE'
+    task_end = 'TASK_END'
+
+    @staticmethod
+    def topic():
+        return 'workflow_reporting'
+
+
 class OverrunPolicy(Enum):
 
     """
@@ -470,19 +481,19 @@ class Workflow(asyncio.Future):
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
-        else:
-            log.debug('new task created for %s', task_tmpl)
-            done_cb = functools.partial(self._run_next_tasks, task_tmpl)
-            task.add_done_callback(done_cb)
-            self.tasks.add(task)
-            # Create the exec dict of the task
-            exec_dict = {'start': datetime.utcnow()}
-            try:
-                exec_dict['id'] = task.uid
-            except AttributeError:
-                exec_dict['id'] = None
-            self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
-            return task
+        self.update_status(task.uid, WorkflowEvent.task_create.value, data)
+        log.debug('new task created for %s', task_tmpl)
+        done_cb = functools.partial(self._run_next_tasks, task_tmpl)
+        task.add_done_callback(done_cb)
+        self.tasks.add(task)
+        # Create the exec dict of the task
+        exec_dict = {'start': datetime.utcnow()}
+        try:
+            exec_dict['id'] = task.uid
+        except AttributeError:
+            exec_dict['id'] = None
+        self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
+        return task
 
     def _join_task(self, next_task, event):
         """
@@ -532,6 +543,18 @@ class Workflow(asyncio.Future):
         log.debug('%s filtered next tasks to: %s', task, filtered_tmpls)
         return filtered_tmpls
 
+    def update_status(self, task_id, rtype, data):
+        """
+        Report a workflow execution step to the broker.
+        """
+        self._broker.dispatch({
+            'type': rtype,
+            'task_id': task_id,
+            'template_id': self._template.uid,
+            'workflow_exec_id': self.uid,
+            'data': data
+        }, WorkflowEvent.topic())
+
     def _run_next_tasks(self, task_tmpl, task):
         """
         A callback to be added to each task in order to select and schedule
@@ -550,6 +573,11 @@ class Workflow(asyncio.Future):
             log.warning('task %s ended on exception', task_tmpl)
             log.exception(exc)
         else:
+            self.update_status(
+                task.uid,
+                WorkflowEvent.task_end.value,
+                {'result': result}
+            )
             next_tmpls = self._get_next_task_templates(task_tmpl, task)
             # Automatically wrap data from parent task into an event object
             if not isinstance(result, Event):
@@ -733,3 +761,13 @@ class WorkflowInterface:
         ran and disables other tasks (unless they're already running).
         """
         self._workflow._set_next_task_templates(self.task, task_ids)
+
+    def update_status(self, data):
+        """
+        Throw a task update information payload to the broker.
+        """
+        self._workflow.update_status(
+            self.task.uid,
+            WorkflowEvent.task_update.value,
+            data
+        )
