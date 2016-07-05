@@ -449,13 +449,13 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
         return task
 
-    def _new_task(self, task_tmpl, data):
+    def _new_task(self, task_tmpl, data, parent_uid=None):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
         """
         try:
-            task = task_tmpl.new_task(data, loop=self._loop)
+            task = task_tmpl.new_task(data, loop=self._loop, parent_uid=parent_uid)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
@@ -478,14 +478,14 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def _join_task(self, task, result):
+    def _join_task(self, next_task, parent_uid, result):
         """
         Pass data to a downstream task that has already been started (by
         another parent). In such a situation, it is known to be a join task.
         """
         try:
             # `data_received()` must be a simple callback (not a coroutine)
-            task.holder.data_received(result, from_parent=True)
+            next_task.holder.data_received(result, from_parent=parent_uid)
         except AttributeError as exc:
             self._internal_exc = exc
             self._cancel_all_tasks()
@@ -549,12 +549,16 @@ class Workflow(asyncio.Future):
                 next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
                 # Downstream task already running, join it!
                 if next_task:
-                    joined = self._join_task(next_task, result)
+                    joined = self._join_task(next_task, task_tmpl.uid, result)
                     if not joined:
                         break
                 # Create new task
                 else:
-                    next_task = self._new_task(tmpl, result)
+                    next_task = self._new_task(
+                        tmpl,
+                        result,
+                        parent_uid=task_tmpl.uid
+                    )
                 if not next_task:
                     break
         finally:

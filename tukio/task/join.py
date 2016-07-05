@@ -1,47 +1,73 @@
 import asyncio
-from asyncio import InvalidStateError
 import logging
+
 from .holder import TaskHolder
 from .task import register
+
 
 log = logging.getLogger(__name__)
 
 
-@register('join_task', 'execute')
+@register('join', 'execute')
 class JoinTask(TaskHolder):
+
     """
     A join task is a regular task that awaits multiple parents calls using data_received.
     Task can be overriden for custom behaviours.
     and decide wether or not unlock the task, wait depending on the calls received
     """
 
+    SCHEMA = {
+        'type': 'object',
+        'required': ['wait_for'],
+        'properties': {
+            'wait_for': {
+                'type': 'array',
+                'minItems': 2,
+                'maxItems': 64,
+                'uniqueItems': True,
+                'items': {
+                    'type': 'string',
+                    'maxLength': 1024
+                }
+            },
+            'timeout': {
+                'type': 'integer',
+                'minimum': 1
+            }
+        }
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.unlock = asyncio.Future()
-        self.data_stash = []
-
-    def ready(self):
-        return len(self.data_stash) >= self.config.get('await_parents', 0)
+        self.unlock = asyncio.Event()
+        self.data_stash = {}
+        self.wait_for = self.config['wait_for']
+        self.timeout = self.config.get('timeout')
 
     async def execute(self, data):
-        log.debug('join task {} started.'.format(self))
-        self.data_received(data, from_parent=True)
-        await self.unlock
-        log.debug('join task {} done.'.format(self))
+        log.info(
+            'Join task waiting for %s (timeout: %s)',
+            self.wait_for,
+            self.timeout
+        )
+        self.data_received(data, from_parent=self._parent_uid)
+        await asyncio.wait_for(self.unlock.wait(), self.timeout)
+        log.info('All parents joined: %s', self.wait_for)
         return self.data_stash
 
-    def data_received(self, data, from_parent=False):
+    def data_received(self, data, from_parent=None):
         """
         Is called when the task is started and a new parents finished.
         configuration takes the number of parents required to follow up.
         """
-        if not from_parent:
+        if from_parent is None:
             return
-        log.debug('Received join task data {}'.format(data))
-        self.data_stash.append(data)
-        if self.ready():
-            try:
-                self.unlock.set_result('Done')
-            except InvalidStateError:
-                # Task may have already been unlocked
-                pass
+        log.info("Parent '%s' joined", from_parent)
+        log.debug('stashed data: %s', data)
+        self.data_stash[from_parent] = data
+        for parent in self.wait_for:
+            if parent not in self.data_stash:
+                break
+        else:
+            self.unlock.set()

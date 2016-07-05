@@ -42,9 +42,10 @@ class TaskHolder:
 
     TASK_NAME = None
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, parent_uid=None):
         self.config = config
         self.uid = str(uuid4())
+        self._parent_uid = parent_uid
 
     def data_received(self, data):
         """
