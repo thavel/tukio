@@ -46,13 +46,20 @@ class TemplateGraphError(Exception):
 
 class WorkflowEvent(Enum):
 
+    workflow_create = 'WORKFLOW_CREATE'
+    workflow_end = 'WORKFLOW_END'
     task_create = 'TASK_CREATE'
     task_update = 'TASK_UPDATE'
     task_end = 'TASK_END'
 
-    @staticmethod
-    def topic():
-        return 'workflow_reporting'
+    @classmethod
+    def topic(cls):
+        # Shady topic to avoid sending unrelated messages to it
+        return '__workflow_reporting'
+
+    @classmethod
+    def values(cls):
+        return [event.value for event in cls]
 
 
 class OverrunPolicy(Enum):
@@ -464,6 +471,8 @@ class Workflow(asyncio.Future):
         # The workflow may fail to start at once
         if not task:
             self._try_mark_done()
+        else:
+            self.update_status(WorkflowEvent.workflow_create, {})
         return task
 
     def _new_task(self, task_tmpl, event):
@@ -481,7 +490,7 @@ class Workflow(asyncio.Future):
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
-        self.update_status(task.uid, WorkflowEvent.task_create.value, data)
+        self.update_status(WorkflowEvent.task_create, data, task_id=task.uid)
         log.debug('new task created for %s', task_tmpl)
         done_cb = functools.partial(self._run_next_tasks, task_tmpl)
         task.add_done_callback(done_cb)
@@ -543,12 +552,12 @@ class Workflow(asyncio.Future):
         log.debug('%s filtered next tasks to: %s', task, filtered_tmpls)
         return filtered_tmpls
 
-    def update_status(self, task_id, rtype, data):
+    def update_status(self, rtype, data, task_id=None):
         """
         Report a workflow execution step to the broker.
         """
         self._broker.dispatch({
-            'type': rtype,
+            'type': rtype.value,
             'task_id': task_id,
             'template_id': self._template.uid,
             'workflow_exec_id': self.uid,
@@ -574,9 +583,9 @@ class Workflow(asyncio.Future):
             log.exception(exc)
         else:
             self.update_status(
-                task.uid,
-                WorkflowEvent.task_end.value,
-                {'result': result}
+                WorkflowEvent.task_end,
+                {'result': result},
+                task_id=task.uid
             )
             next_tmpls = self._get_next_task_templates(task_tmpl, task)
             # Automatically wrap data from parent task into an event object
@@ -619,6 +628,7 @@ class Workflow(asyncio.Future):
             else:
                 self.set_result(self.tasks)
             self._end = datetime.utcnow()
+            self.update_status(WorkflowEvent.workflow_end, {})
 
     def _all_tasks_done(self):
         """
@@ -767,7 +777,7 @@ class WorkflowInterface:
         Throw a task update information payload to the broker.
         """
         self._workflow.update_status(
-            self.task.uid,
-            WorkflowEvent.task_update.value,
-            data
+            WorkflowEvent.task_update,
+            data,
+            task_id=self.task.uid
         )
