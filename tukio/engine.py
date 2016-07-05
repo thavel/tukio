@@ -5,7 +5,7 @@ import asyncio
 import logging
 import weakref
 
-from tukio.workflow import OverrunPolicy, new_workflow
+from tukio.workflow import OverrunPolicy, new_workflow, Workflow
 from tukio.broker import get_broker
 from tukio.task import tukio_factory
 from tukio.utils import Listen
@@ -112,8 +112,6 @@ class Engine(asyncio.Future):
     The Tukio workflow engine. Basically, it can load or unload workflow
     templates and trigger new executions of workflows upon receiving new data.
     The `run()` method allows to select and trigger a particular workflow.
-    Workflow executions can be cancelled as per their execution ID (`cancel()`)
-    or all at once (`cancel_all()`).
     It is an awaitable object (inherits from `asyncio.Future`) which will be
     marked as done after its `stop()` method has been called and all the
     running workflows are done. Afterwards no new workflow can be triggered.
@@ -124,10 +122,9 @@ class Engine(asyncio.Future):
         # use the custom asyncio task factory
         self._loop.set_task_factory(tukio_factory)
         self._selector = _WorkflowSelector()
-        self._running = dict()
+        self._instances = []
         self._broker = get_broker(self._loop)
         self._lock = asyncio.Lock()
-        self._running_by_id = weakref.WeakValueDictionary()
         self._must_stop = False
 
     @property
@@ -140,31 +137,22 @@ class Engine(asyncio.Future):
     @property
     def instances(self):
         """
-        Returns the dict or running workflows
+        Returns the list or running instances
         """
-        return self._running_by_id
+        return self._instances
 
     def _add_wflow(self, wflow):
         """
-        Adds a new entry into the dict of running workflows and updates the
-        weak value dict to index it by its execution ID.
+        Adds a new entry into the list of running instances.
         """
-        try:
-            self._running[wflow.template.uid].append(wflow)
-        except KeyError:
-            self._running[wflow.template.uid] = [wflow]
-        self._running_by_id[wflow.uid] = wflow
+        self._instances.append(wflow)
         log.debug('new workflow started %s', wflow)
 
     def _remove_wflow(self, wflow):
         """
-        Removes a worflow instance from the dict of running workflows.
+        Removes a worflow instance from the list of running instances.
         """
-        self._running[wflow.template.uid].remove(wflow)
-        # Cleanup the running dict if no more running instance of that template
-        if len(self._running[wflow.template.uid]) == 0:
-            del self._running[wflow.template.uid]
-        del self._running_by_id[wflow.uid]
+        self._instances.remove(wflow)
         log.debug('workflow removed from the running list: %s', wflow)
 
         try:
@@ -173,19 +161,22 @@ class Engine(asyncio.Future):
             log.warning('workflow %s ended on exception', wflow)
             log.exception(exc)
 
-        if self._must_stop and not self._running and not self.done():
+        if self._must_stop and not self._instances and not self.done():
             self.set_result(None)
             log.debug('no more workflow running, engine stopped')
 
     def stop(self, force=False):
         """
-        Cancels all workflows and prevent new instances from being run.
+        Prevents new workflow instances from being run and optionally cancels
+        all running workflows (when force=True).
         """
         self._must_stop = True
-        if not self._running and not self.done():
+        if not self._instances and not self.done():
             self.set_result(None)
         elif force:
-            self.cancel_all()
+            for wflow in self._instances:
+                wflow.cancel()
+                log.debug('cancelled workflow %s', wflow)
         return self
 
     def _run_in_task(self, callback, *args, **kwargs):
@@ -243,53 +234,62 @@ class Engine(asyncio.Future):
         which in turn will disptach this event to the right running workflows
         and may trigger new workflow executions.
         """
-        if topic:
-            log.debug("data received '%s' in topic '%s'", data, topic)
-        else:
-            log.debug("data received '%s' (no topic)", data)
+        log.debug("data received: %s (topic=%s)", data, topic)
+        # Disptatch data to 'listening' tasks at all cases
         self._broker.dispatch(data, topic)
+        # Don't start new workflow instances if `stop()` was called.
+        if self._must_stop:
+            log.debug("The engine is stopping, cannot trigger new workflows")
+            return
         with await self._lock:
             templates = self._selector.select(topic)
             # Try to trigger new workflows from the current dict of workflow
             # templates at all times!
             wflows = []
             for tmpl in templates:
-                wflow = await self._run_in_task(self.run, tmpl, data)
+                wflow = self._try_run(tmpl, data)
                 if wflow:
                     wflows.append(wflow)
         return wflows
 
+    async def trigger(self, template_id, data):
+        """
+        Trigger a new execution of the workflow template identified by
+        `template_id`. Use this method instead of a reserved topic +
+        `data_received` to trigger a specific workflow.
+        """
+        with await self._lock:
+            # Ignore unknown (aka not loaded) workflow templates
+            try:
+                template = self._selector.get(template_id)
+            except KeyError:
+                log.error('workflow template %s not loaded', template_id)
+                return None
+            return self._try_run(template, data)
+
     def _do_run(self, wflow, data):
         """
-        Adds a workflow to the running list and actually starts it.
+        A workflow instance must be in the list of running instances until
+        it completes.
         """
         self._add_wflow(wflow)
+        wflow.add_done_callback(self._remove_wflow)
         wflow.run(data)
 
-    def run(self, template, data):
+    def _try_run(self, template, data):
         """
-        Try to run a new instance of workflow defined by `tmpl_id` according to
-        the instances already running and the overrun policy.
+        Try to run a new instance of workflow according to the instances
+        already running and the overrun policy.
         """
         # Don't start new workflow instances if `stop()` was called.
         if self._must_stop:
-            log.debug("The engine is stopping, cannot run a new workflow from"
-                      "template id %s", template.uid)
+            log.debug("The engine is stopping, cannot trigger new workflows")
             return
-
-        # Do nothing if the template is not loaded
-        try:
-            self._selector.get(template.uid)
-        except KeyError:
-            log.error('Template %s is not loaded', template.uid)
-            return
-
-        running = self._running.get(template.uid)
+        running = self._instances.get(template.uid)
         # Always apply the policy of the current workflow template (workflow
         # instances may run with another version of the template)
         wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
-            wflow.add_done_callback(self._remove_wflow)
             if template.policy == OverrunPolicy.abort_running and running:
                 def cb():
                     self._do_run(wflow, data)
@@ -304,6 +304,9 @@ class Engine(asyncio.Future):
         """
         Wait for the end of a list of aborted (cancelled) workflows before
         starting a new one when the policy is 'abort-running'.
+
+        XXX: we shouldn't find policy-specific code in the engine! Find a
+        better way to do it.
         """
         # Always act on a snapshot of the original running list. Don't forget
         # it is a living list!
@@ -311,7 +314,7 @@ class Engine(asyncio.Future):
         await asyncio.wait(others)
         callback()
 
-    def side_run(self, template, data):
+    async def run_once(self, template, data):
         """
         Starts a new execution of the workflow template regardless of the
         overrun policy and already running workflows.
@@ -321,33 +324,7 @@ class Engine(asyncio.Future):
             log.debug("The engine is stopping, cannot run a new workflow from"
                       "template id %s", template.uid)
             return None
-        wflow = new_workflow(template, loop=self._loop)
-        self._add_wflow(wflow)
-        wflow.add_done_callback(self._remove_wflow)
-        wflow.run(data)
+        with await self._lock:
+            wflow = Workflow(template, loop=self._loop)
+            self._do_run(wflow, data)
         return wflow
-
-    def cancel(self, exec_id):
-        """
-        Cancels an execution of workflow identified by its execution ID.
-        The cancelled workflow instance (a future object) is returned.
-        If the workflow could not be found, returns None.
-        """
-        wflow = self._running_by_id.get(exec_id)
-        if wflow:
-            wflow.cancel()
-            log.debug('cancelled workflow %s', wflow)
-        return wflow
-
-    def cancel_all(self):
-        """
-        Cancels all the running workflows.
-        """
-        cancelled = 0
-        for wf_list in self._running.values():
-            for wflow in wf_list:
-                is_cancelled = wflow.cancel()
-                if is_cancelled:
-                    cancelled += 1
-        log.debug('cancelled %s workflows', cancelled)
-        return cancelled
