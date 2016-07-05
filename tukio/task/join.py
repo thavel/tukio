@@ -12,31 +12,10 @@ log = logging.getLogger(__name__)
 class JoinTask(TaskHolder):
 
     """
-    A join task is a regular task that awaits multiple parents calls using data_received.
-    Task can be overriden for custom behaviours.
-    and decide wether or not unlock the task, wait depending on the calls received
+    A join task is an almost-standard task that allows awaiting for multiple
+    parents and gathering their results using `data_received()`.
+    The `wait_for` config parameter is mandatory and is a list of task IDs.
     """
-
-    SCHEMA = {
-        'type': 'object',
-        'required': ['wait_for'],
-        'properties': {
-            'wait_for': {
-                'type': 'array',
-                'minItems': 2,
-                'maxItems': 64,
-                'uniqueItems': True,
-                'items': {
-                    'type': 'string',
-                    'maxLength': 1024
-                }
-            },
-            'timeout': {
-                'type': 'integer',
-                'minimum': 1
-            }
-        }
-    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -51,7 +30,6 @@ class JoinTask(TaskHolder):
             self.wait_for,
             self.timeout
         )
-        self.data_received(data, from_parent=self._parent_uid)
         await asyncio.wait_for(self.unlock.wait(), self.timeout)
         log.info('All parents joined: %s', self.wait_for)
         return self.data_stash

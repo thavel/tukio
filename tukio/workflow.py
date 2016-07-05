@@ -449,13 +449,13 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
         return task
 
-    def _new_task(self, task_tmpl, data, parent_uid=None):
+    def _new_task(self, task_tmpl, data):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
         """
         try:
-            task = task_tmpl.new_task(data, loop=self._loop, parent_uid=parent_uid)
+            task = task_tmpl.new_task(data, loop=self._loop)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
@@ -554,11 +554,12 @@ class Workflow(asyncio.Future):
                         break
                 # Create new task
                 else:
-                    next_task = self._new_task(
-                        tmpl,
-                        result,
-                        parent_uid=task_tmpl.uid
-                    )
+                    next_task = self._new_task(tmpl, result)
+                    # If is a join task, immediately join task's result
+                    if tmpl.name == 'join':
+                        next_task.holder.data_received(
+                            result, from_parent=task_tmpl.uid
+                        )
                 if not next_task:
                     break
         finally:
