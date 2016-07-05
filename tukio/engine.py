@@ -285,9 +285,10 @@ class Engine(asyncio.Future):
         if self._must_stop:
             log.debug("The engine is stopping, cannot trigger new workflows")
             return
-        running = self._instances.get(template.uid)
         # Always apply the policy of the current workflow template (workflow
         # instances may run with another version of the template)
+        running = [i for i in self._instances
+                   if i.template.uid == template.uid]
         wflow = new_workflow(template, running=running, loop=self._loop)
         if wflow:
             if template.policy == OverrunPolicy.abort_running and running:
