@@ -472,7 +472,7 @@ class Workflow(asyncio.Future):
         if not task:
             self._try_mark_done()
         else:
-            self.update_status(WorkflowEvent.workflow_create, {})
+            self.broker_event(WorkflowEvent.workflow_create, {})
         return task
 
     def _new_task(self, task_tmpl, event):
@@ -490,7 +490,7 @@ class Workflow(asyncio.Future):
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
-        self.update_status(WorkflowEvent.task_create, data, task_id=task.uid)
+        self.broker_event(WorkflowEvent.task_create, data, task_id=task.uid)
         log.debug('new task created for %s', task_tmpl)
         done_cb = functools.partial(self._run_next_tasks, task_tmpl)
         task.add_done_callback(done_cb)
@@ -552,7 +552,7 @@ class Workflow(asyncio.Future):
         log.debug('%s filtered next tasks to: %s', task, filtered_tmpls)
         return filtered_tmpls
 
-    def update_status(self, rtype, data, task_id=None):
+    def broker_event(self, rtype, data, task_id=None):
         """
         Report a workflow execution step to the broker.
         """
@@ -582,7 +582,7 @@ class Workflow(asyncio.Future):
             log.warning('task %s ended on exception', task_tmpl)
             log.exception(exc)
         else:
-            self.update_status(
+            self.broker_event(
                 WorkflowEvent.task_end,
                 {'result': result},
                 task_id=task.uid
@@ -628,7 +628,7 @@ class Workflow(asyncio.Future):
             else:
                 self.set_result(self.tasks)
             self._end = datetime.utcnow()
-            self.update_status(WorkflowEvent.workflow_end, {})
+            self.broker_event(WorkflowEvent.workflow_end, {})
 
     def _all_tasks_done(self):
         """
@@ -776,7 +776,7 @@ class WorkflowInterface:
         """
         Throw a task update information payload to the broker.
         """
-        self._workflow.update_status(
+        self._workflow.broker_event(
             WorkflowEvent.task_update,
             data,
             task_id=self.task.uid
