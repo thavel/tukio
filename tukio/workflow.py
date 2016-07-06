@@ -547,19 +547,22 @@ class Workflow(asyncio.Future):
             next_tmpls = self._get_next_task_templates(task_tmpl, task)
             for tmpl in next_tmpls:
                 next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
-                # Downstream task already running, join it!
                 if next_task:
+                    # Ignore done tasks
+                    if next_task.done():
+                        continue
+                    # Downstream task already running, join it!
                     joined = self._join_task(next_task, task_tmpl.uid, result)
                     if not joined:
                         break
                 # Create new task
                 else:
                     next_task = self._new_task(tmpl, result)
-                    # If is a join task, immediately join task's result
-                    if getattr(next_task.holder, 'IS_JOIN_TASK', None) is True:
-                        next_task.holder.data_received(
-                            result, from_parent=task_tmpl.uid
-                        )
+                    # # If is a join task, immediately join task's result
+                    # if getattr(next_task.holder, 'IS_JOIN_TASK', None) is True:
+                    #     next_task.holder.data_received(
+                    #         result, from_parent=task_tmpl.uid
+                    #     )
                 if not next_task:
                     break
         finally:
