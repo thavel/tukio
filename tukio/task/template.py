@@ -27,11 +27,16 @@ class TaskTemplate:
     def listen(self):
         return Listen.get(self.topics)
 
-    def new_task(self, *args, loop=None, **kwargs):
+    def new_task(self, *args, loop=None):
         """
         Create a new task from the current task template.
         """
-        return new_task(self.name, *args, config=self.config, loop=loop, **kwargs)
+        return new_task(
+            self.name,
+            *args,
+            config=self.config,
+            loop=loop
+        )
 
     @classmethod
     def from_dict(cls, task_dict):

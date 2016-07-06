@@ -556,7 +556,7 @@ class Workflow(asyncio.Future):
                 else:
                     next_task = self._new_task(tmpl, result)
                     # If is a join task, immediately join task's result
-                    if tmpl.name == 'join':
+                    if getattr(next_task.holder, 'IS_JOIN_TASK', None) is True:
                         next_task.holder.data_received(
                             result, from_parent=task_tmpl.uid
                         )

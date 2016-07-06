@@ -17,8 +17,10 @@ class JoinTask(TaskHolder):
     The `wait_for` config parameter is mandatory and is a list of task IDs.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    IS_JOIN_TASK = True
+
+    def __init__(self, config):
+        super().__init__(config)
         self.unlock = asyncio.Event()
         self.data_stash = {}
         self.wait_for = self.config['wait_for']
@@ -31,7 +33,7 @@ class JoinTask(TaskHolder):
             self.timeout
         )
         await asyncio.wait_for(self.unlock.wait(), self.timeout)
-        log.info('All parents joined: %s', self.wait_for)
+        log.debug('All parents joined: %s', self.wait_for)
         return self.data_stash
 
     def data_received(self, data, from_parent=None):
@@ -41,8 +43,7 @@ class JoinTask(TaskHolder):
         """
         if from_parent is None:
             return
-        log.info("Parent '%s' joined", from_parent)
-        log.debug('stashed data: %s', data)
+        log.debug("Parent '%s' joined with data: %s", from_parent, data)
         self.data_stash[from_parent] = data
         for parent in self.wait_for:
             if parent not in self.data_stash:
