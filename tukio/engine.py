@@ -3,7 +3,6 @@ Tukio Workflow Engine
 """
 import asyncio
 import logging
-import weakref
 
 from tukio.workflow import OverrunPolicy, new_workflow, Workflow
 from tukio.broker import get_broker
