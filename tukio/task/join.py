@@ -17,36 +17,41 @@ class JoinTask(TaskHolder):
     The `wait_for` config parameter is mandatory and is a list of task IDs.
     """
 
-    IS_JOIN_TASK = True
-
     def __init__(self, config):
         super().__init__(config)
-        self.unlock = asyncio.Event()
-        self.data_stash = {}
-        self.wait_for = self.config['wait_for']
-        self.timeout = self.config.get('timeout')
+        self._unlock = asyncio.Event()
+        self._data_stash = []
+        # Don't wait for other tasks if not specified
+        self._wait_for = list(self.config.get('wait_for', []))
+        self._timeout = self.config.get('timeout')
 
     async def execute(self, event):
         log.info(
-            'Join task waiting for %s (timeout: %s)',
-            self.wait_for,
-            self.timeout
+            'join task waiting for %s (timeout: %s)',
+            self._wait_for,
+            self._timeout
         )
-        await asyncio.wait_for(self.unlock.wait(), self.timeout)
-        log.debug('All parents joined: %s', self.wait_for)
-        return self.data_stash
+        self.data_received(event)
+        try:
+            await asyncio.wait_for(self._unlock.wait(), self._timeout)
+        except asyncio.TimeoutError:
+            log.warning("join timeout, still waiting for %s", self._wait_for)
+        else:
+            log.debug('all awaited parents joined')
+        return self._data_stash
 
     def data_received(self, event):
         """
-        Is called when the task is started and a new parents finished.
-        configuration takes the number of parents required to follow up.
+        Called when the task is already started and a new parent just finished.
         """
-        if from_parent is None:
+        from_task = event.from_task
+        data = event.data
+        if from_task is None:
+            log.warning("join task received data from unknown task: %s", event)
             return
-        log.debug("Parent '%s' joined with data: %s", from_parent, data)
-        self.data_stash[from_parent] = data
-        for parent in self.wait_for:
-            if parent not in self.data_stash:
-                break
-        else:
-            self.unlock.set()
+        log.debug("parent task '%s' joined with data: %s", from_task, data)
+        self._data_stash.append(data)
+        if from_task in self._wait_for:
+            self._wait_for.remove(from_task)
+        if len(self._wait_for) == 0:
+            self._unlock.set()

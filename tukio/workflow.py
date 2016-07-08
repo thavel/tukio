@@ -551,9 +551,13 @@ class Workflow(asyncio.Future):
             log.exception(exc)
         else:
             next_tmpls = self._get_next_task_templates(task_tmpl, task)
+            # Automatically wrap data from parent task into an event object
+            if not isinstance(result, Event):
+                event = Event(data=result, from_task=task_tmpl.uid)
+            else:
+                event = Event(data=result.data, from_task=task_tmpl.uid)
             for tmpl in next_tmpls:
                 next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
-                event = Event(data=result, from_task=task_tmpl.uid)
                 if next_task:
                     # Ignore done tasks
                     if next_task.done():
