@@ -80,7 +80,7 @@ class TestWorkflowInterface(unittest.TestCase):
         of `WorkflowInterface`. It should raise a `WorkflowNotFoundError`.
         """
         # Cannot get an interface when the task was not triggered by a workflow
-        task = new_task('fakeroot', 'dummy', loop=self.loop)
+        task = new_task('fakeroot', data='dummy', loop=self.loop)
         with self.assertRaises(WorkflowNotFoundError):
             WorkflowInterface(task)
 

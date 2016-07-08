@@ -65,12 +65,26 @@ class BadInitTaskHolder3:
         pass
 
 
-async def my_coro_task():
+class BadExecTaskHolder1:
+    """A class with a coroutine that cannot be passed data is not valid"""
+    def __init__(self, config):
+        pass
+
+    async def dummy(self):
+        pass
+
+
+async def my_coro_task(data):
     """A valid coroutine"""
     return MY_CORO_TASK_RES
 
 
-async def other_coro():
+async def bad_coro_task():
+    """A coroutine with a bad signature (no argument)"""
+    pass
+
+
+async def other_coro(data):
     """Another valid coroutine"""
     return None
 
@@ -227,6 +241,7 @@ class TestNewTask(unittest.TestCase):
         register('my-coro-task')(my_coro_task)
         register('task-bad-inputs', 'dummy')(BadInitTaskHolder1)
         register('task-init-exc', 'dummy')(BadInitTaskHolder2)
+        register('task-bad-coro', 'dummy')(BadExecTaskHolder1)
 
     @classmethod
     def tearDownClass(cls):
@@ -243,7 +258,7 @@ class TestNewTask(unittest.TestCase):
         Various cases which must lead to create asyncio tasks successfully.
         """
         # Create a task from a task holder
-        task = new_task('my-task-holder', 'junk-data')
+        task = new_task('my-task-holder')
         self.assertIsInstance(task, asyncio.Task)
 
         # Create a task from a simple coroutine
@@ -263,13 +278,10 @@ class TestNewTask(unittest.TestCase):
         Trying to create a new asyncio task with invalid inputs must raise
         a `TypeError` exception.
         """
-        # No data as argument whereas the coroutine expects 1 positional arg
+        # 1 (mandatory) positional argument (None) passed to the coroutine
+        # whereas the coroutine takes no argument
         with self.assertRaisesRegex(TypeError, 'positional argument'):
-            new_task('my-task-holder')
-
-        # Two positional args whereas the coroutine expects only 1
-        with self.assertRaisesRegex(TypeError, 'positional argument'):
-            new_task('my-task-holder', 'one', 'two')
+            new_task('task-bad-coro')
 
     def test_new_task_bad_holder(self):
         """
@@ -321,13 +333,13 @@ class TestTaskFactory(unittest.TestCase):
         self.assertEqual(res, MY_TASK_HOLDER_RES)
 
         # Create and run a `TukioTask` from a registered coroutine
-        task = asyncio.ensure_future(my_coro_task())
+        task = asyncio.ensure_future(my_coro_task(None))
         self.assertIsInstance(task, TukioTask)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_CORO_TASK_RES)
 
         # Run a regular coroutine
-        task = asyncio.ensure_future(other_coro())
+        task = asyncio.ensure_future(other_coro(None))
         self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, None)
@@ -335,8 +347,8 @@ class TestTaskFactory(unittest.TestCase):
         # Run a generator (e.g. as returned by `asyncio.wait`)
         # The task factory is also called in this situation and is passed the
         # generator object.
-        t1 = asyncio.ensure_future(my_coro_task())
-        t2 = asyncio.ensure_future(other_coro())
+        t1 = asyncio.ensure_future(my_coro_task(None))
+        t2 = asyncio.ensure_future(other_coro(None))
         self.assertIsInstance(t1, TukioTask)
         self.assertIsInstance(t2, asyncio.Task)
         gen = asyncio.wait([t1, t2])
@@ -366,13 +378,13 @@ class TestTaskFactory(unittest.TestCase):
         self.assertEqual(res, MY_TASK_HOLDER_RES)
 
         # Create and run a Tukio task implemented as a coroutine
-        task = asyncio.ensure_future(my_coro_task())
+        task = asyncio.ensure_future(my_coro_task(None))
         self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_CORO_TASK_RES)
 
         # Create and run a regular `asyncio.Task`
-        task = asyncio.ensure_future(other_coro())
+        task = asyncio.ensure_future(other_coro(None))
         self.assertIsInstance(task, asyncio.Task)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, None)
@@ -380,8 +392,8 @@ class TestTaskFactory(unittest.TestCase):
         # Run a generator (e.g. as returned by `asyncio.wait`)
         # The task factory is also called in this situation and is passed the
         # generator object.
-        t1 = asyncio.ensure_future(my_coro_task())
-        t2 = asyncio.ensure_future(other_coro())
+        t1 = asyncio.ensure_future(my_coro_task(None))
+        t2 = asyncio.ensure_future(other_coro(None))
         self.assertIsInstance(t1, asyncio.Task)
         self.assertIsInstance(t2, asyncio.Task)
         gen = asyncio.wait([t1, t2])
@@ -399,7 +411,7 @@ class TestTaskFactory(unittest.TestCase):
         self.loop.set_task_factory(tukio_factory)
 
         # Create a task from a simple coroutine
-        task = asyncio.ensure_future(my_coro_task())
+        task = asyncio.ensure_future(my_coro_task(None))
         self.assertTrue(hasattr(task, 'holder'))
         self.assertTrue(hasattr(task, 'uid'))
         self.assertIsNone(task.holder)
@@ -439,6 +451,7 @@ class TestTaskTemplate(unittest.TestCase):
         register('my-task-holder', 'do_it')(MyTaskHolder)
         register('basic-holder', 'mycoro')(BasicTaskHolder)
         register('dummy-coro')(my_coro_task)
+        register('bad-coro-task')(bad_coro_task)
         cls.loop = asyncio.get_event_loop()
         cls.holder = MyTaskHolder({'hello': 'world'})
         cls.basic = BasicTaskHolder({'hello': 'world'})
@@ -480,7 +493,7 @@ class TestTaskTemplate(unittest.TestCase):
 
         # Also works with a registered coroutine
         task_tmpl = TaskTemplate('dummy-coro')
-        task = task_tmpl.new_task(loop=self.loop)
+        task = task_tmpl.new_task(data='junk-data', loop=self.loop)
         self.assertIsInstance(task, TukioTask)
 
     def test_new_task_unknown(self):
@@ -490,7 +503,7 @@ class TestTaskTemplate(unittest.TestCase):
         """
         task_tmpl = TaskTemplate('dummy')
         with self.assertRaises(UnknownTaskName):
-            task_tmpl.new_task()
+            task_tmpl.new_task('junk-data')
 
     def test_new_task_bad_args(self):
         """
@@ -503,7 +516,7 @@ class TestTaskTemplate(unittest.TestCase):
             task_tmpl.new_task()
 
         # Too many arguments
-        task_tmpl = TaskTemplate('dummy-coro')
+        task_tmpl = TaskTemplate('bad-coro-task')
         with self.assertRaisesRegex(TypeError, 'positional argument'):
             task_tmpl.new_task('junk')
 

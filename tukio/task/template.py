@@ -31,7 +31,7 @@ class TaskTemplate:
         """
         Create a new task from the current task template.
         """
-        return new_task(self.name, data, config=self.config, loop=loop)
+        return new_task(self.name, data=data, config=self.config, loop=loop)
 
     @classmethod
     def from_dict(cls, task_dict):

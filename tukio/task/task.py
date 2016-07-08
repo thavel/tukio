@@ -79,7 +79,7 @@ def register(task_name, coro_name=None):
     return decorator
 
 
-def new_task(task_name, data, config=None, loop=None):
+def new_task(task_name, *, data=None, config=None, loop=None):
     """
     Schedules the execution of the coroutine registered as `task_name` (either
     defined in a task holder class or not) in the loop and returns an instance
