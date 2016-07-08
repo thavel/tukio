@@ -79,7 +79,7 @@ def register(task_name, coro_name=None):
     return decorator
 
 
-def new_task(task_name, *args, config=None, loop=None, **kwargs):
+def new_task(task_name, data, config=None, loop=None):
     """
     Schedules the execution of the coroutine registered as `task_name` (either
     defined in a task holder class or not) in the loop and returns an instance
@@ -88,7 +88,7 @@ def new_task(task_name, *args, config=None, loop=None, **kwargs):
     klass, coro_fn = TaskRegistry.get(task_name)
     if klass:
         task_holder = klass(config)
-        coro = coro_fn(task_holder, *args, **kwargs)
+        coro = coro_fn(task_holder, data)
     else:
-        coro = coro_fn(*args, **kwargs)
+        coro = coro_fn(data)
     return asyncio.ensure_future(coro, loop=loop)

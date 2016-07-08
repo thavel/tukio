@@ -2,6 +2,8 @@ import asyncio
 import logging
 import itertools
 
+from tukio.event import Event
+
 
 log = logging.getLogger(__name__)
 
@@ -68,11 +70,16 @@ class Broker(object):
                 handlers = handlers | self._topic_handlers[topic]
             except KeyError:
                 pass
+        # Automaticall wrap input data into an event object
+        if not isinstance(data, Event):
+            event = Event(data=data, topic=topic)
+        else:
+            event = data
         for handler in handlers:
             if asyncio.iscoroutinefunction(handler):
-                asyncio.ensure_future(handler(data), loop=self._loop)
+                asyncio.ensure_future(handler(event), loop=self._loop)
             else:
-                self._loop.call_soon(handler, data)
+                self._loop.call_soon(handler, event)
 
     def register(self, coro_or_cb, topic=None):
         """

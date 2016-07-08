@@ -11,7 +11,7 @@ decorator:
         def __init__(self, config):
             # some code
 
-        async def my_task_impl(self, *args, **kwargs):
+        async def my_task_impl(self, event):
             # some code
 
 Which turns into a more compact class when you inherit your own class from
@@ -19,7 +19,7 @@ Which turns into a more compact class when you inherit your own class from
 
     @register('my-holder', 'my_task_impl')
     class MyHolder(TaskHolder):
-        async def my_task_impl(self, *args, **kwargs):
+        async def my_task_impl(self, event):
             # some code
 
 """
@@ -46,7 +46,7 @@ class TaskHolder:
         self.config = config
         self.uid = str(uuid4())
 
-    def data_received(self, data):
+    def data_received(self, event):
         """
         This callback is executed if the broker must pass a new event to the
         task. Override this method to handle data as expected by the task.

@@ -26,7 +26,7 @@ class JoinTask(TaskHolder):
         self.wait_for = self.config['wait_for']
         self.timeout = self.config.get('timeout')
 
-    async def execute(self, data):
+    async def execute(self, event):
         log.info(
             'Join task waiting for %s (timeout: %s)',
             self.wait_for,
@@ -36,7 +36,7 @@ class JoinTask(TaskHolder):
         log.debug('All parents joined: %s', self.wait_for)
         return self.data_stash
 
-    def data_received(self, data, from_parent=None):
+    def data_received(self, event):
         """
         Is called when the task is started and a new parents finished.
         configuration takes the number of parents required to follow up.

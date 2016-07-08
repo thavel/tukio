@@ -10,6 +10,7 @@ from tukio.dag import DAG
 from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName
 from tukio.utils import FutureState, Listen
 from tukio.broker import get_broker
+from tukio.event import Event
 
 
 log = logging.getLogger(__name__)
@@ -442,20 +443,25 @@ class Workflow(asyncio.Future):
             return
         # Run the root task
         root_tmpl = self._template.root()
-        task = self._new_task(root_tmpl, data)
+        # Automatically wrap input data into an event object
+        if not isinstance(data, Event):
+            event = Event(data=data)
+        else:
+            event = data
+        task = self._new_task(root_tmpl, event)
         self._start = datetime.utcnow()
         # The workflow may fail to start at once
         if not task:
             self._try_mark_done()
         return task
 
-    def _new_task(self, task_tmpl, data):
+    def _new_task(self, task_tmpl, event):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
         """
         try:
-            task = task_tmpl.new_task(data, loop=self._loop)
+            task = task_tmpl.new_task(event, loop=self._loop)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
@@ -478,14 +484,14 @@ class Workflow(asyncio.Future):
             self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
             return task
 
-    def _join_task(self, next_task, parent_uid, result):
+    def _join_task(self, next_task, event):
         """
-        Pass data to a downstream task that has already been started (by
+        Pass an event to a downstream task that has already been started (by
         another parent). In such a situation, it is known to be a join task.
         """
         try:
             # `data_received()` must be a simple callback (not a coroutine)
-            next_task.holder.data_received(result, from_parent=parent_uid)
+            next_task.holder.data_received(event)
         except AttributeError as exc:
             self._internal_exc = exc
             self._cancel_all_tasks()
@@ -547,22 +553,18 @@ class Workflow(asyncio.Future):
             next_tmpls = self._get_next_task_templates(task_tmpl, task)
             for tmpl in next_tmpls:
                 next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
+                event = Event(data=result, from_task=task_tmpl.uid)
                 if next_task:
                     # Ignore done tasks
                     if next_task.done():
                         continue
                     # Downstream task already running, join it!
-                    joined = self._join_task(next_task, task_tmpl.uid, result)
+                    joined = self._join_task(next_task, event)
                     if not joined:
                         break
                 # Create new task
                 else:
-                    next_task = self._new_task(tmpl, result)
-                    # # If is a join task, immediately join task's result
-                    # if getattr(next_task.holder, 'IS_JOIN_TASK', None) is True:
-                    #     next_task.holder.data_received(
-                    #         result, from_parent=task_tmpl.uid
-                    #     )
+                    next_task = self._new_task(tmpl, event)
                 if not next_task:
                     break
         finally:
