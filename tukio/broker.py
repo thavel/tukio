@@ -28,10 +28,6 @@ class _BrokerRegistry:
         return broker
 
 
-class BrokerDeleteTopicError(Exception):
-    pass
-
-
 EXEC_TOPIC = "__exec_topic__"
 
 

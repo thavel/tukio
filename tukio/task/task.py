@@ -12,6 +12,8 @@ import logging
 import inspect
 from enum import Enum
 
+from tukio.broker import get_broker, EXEC_TOPIC
+
 
 log = logging.getLogger(__name__)
 
@@ -99,5 +101,16 @@ class TaskExecState(Enum):
 
     begin = 'task-begin'
     end = 'task-end'
-    error = 'task-end'
+    error = 'task-error'
     progress = 'task-progress'
+
+
+def dispatch_progress(data, broker=None):
+    """
+    A shorthand to dispatch task progress events in the 'EXEC_TOPIC' from any
+    tukio task.
+    """
+    broker = broker or get_broker()
+    event_data = {'type': TaskExecState.progress.value}
+    event_data['content'] = data
+    broker.dispatch(event_data, topic=EXEC_TOPIC)
