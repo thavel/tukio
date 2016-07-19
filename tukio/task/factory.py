@@ -22,6 +22,11 @@ class TukioTask(asyncio.Task):
             self.uid = str(uuid4())
         self._broker = get_broker(self._loop)
         self._in_progress = False
+        self._template = None
+
+    @property
+    def template(self):
+        return self._template
 
     def in_progress(self):
         """

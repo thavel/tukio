@@ -29,9 +29,11 @@ class TaskTemplate:
 
     def new_task(self, data, loop=None):
         """
-        Create a new task from the current task template.
+        Create a new asyncio task from the current task template.
         """
-        return new_task(self.name, data=data, config=self.config, loop=loop)
+        task = new_task(self.name, data=data, config=self.config, loop=loop)
+        task._template = self
+        return task
 
     @classmethod
     def from_dict(cls, task_dict):

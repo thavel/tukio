@@ -53,15 +53,6 @@ class WorkflowExecState(Enum):
     error = 'workflow-error'
     progress = 'workflow-progress'
 
-    # @classmethod
-    # def topic(cls):
-    #     # Shady topic to avoid sending unrelated messages to it
-    #     return '__workflow_exec__'
-    #
-    # @classmethod
-    # def values(cls):
-    #     return [event.value for event in cls]
-
 
 class OverrunPolicy(Enum):
 
