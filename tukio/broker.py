@@ -32,6 +32,9 @@ class BrokerDeleteTopicError(Exception):
     pass
 
 
+EXEC_TOPIC = "__exec_topic__"
+
+
 class Broker(object):
 
     """
@@ -70,9 +73,9 @@ class Broker(object):
                 handlers = handlers | self._topic_handlers[topic]
             except KeyError:
                 pass
-        # Automaticall wrap input data into an event object
+        # Automatically wrap input data into an event object
         if not isinstance(data, Event):
-            event = Event(data=data, topic=topic)
+            event = Event.from_context(data, topic)
         else:
             event = data
         for handler in handlers:

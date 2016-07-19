@@ -23,6 +23,7 @@ class WorkflowError(Exception):
 class WorkflowRootTaskError(WorkflowError):
 
     def __init__(self, value):
+        super().__init__()
         self._value = value
 
     def __str__(self):
@@ -35,31 +36,31 @@ class WorkflowNotFoundError(WorkflowError):
         return 'no workfow bound to the task, cannot unlock it!'
 
 
-class TemplateGraphError(Exception):
+class TemplateGraphError(WorkflowError):
 
     def __init__(self, key):
+        super().__init__()
         self._key = key
 
     def __str__(self):
         return 'graph error on task id: {}'.format(self._key)
 
 
-class WorkflowEvent(Enum):
+class WorkflowExecState(Enum):
 
-    workflow_create = 'WORKFLOW_CREATE'
-    workflow_end = 'WORKFLOW_END'
-    task_create = 'TASK_CREATE'
-    task_update = 'TASK_UPDATE'
-    task_end = 'TASK_END'
+    begin = 'workflow-begin'
+    end = 'workflow-end'
+    error = 'workflow-error'
+    progress = 'workflow-progress'
 
-    @classmethod
-    def topic(cls):
-        # Shady topic to avoid sending unrelated messages to it
-        return '__workflow_reporting'
-
-    @classmethod
-    def values(cls):
-        return [event.value for event in cls]
+    # @classmethod
+    # def topic(cls):
+    #     # Shady topic to avoid sending unrelated messages to it
+    #     return '__workflow_exec__'
+    #
+    # @classmethod
+    # def values(cls):
+    #     return [event.value for event in cls]
 
 
 class OverrunPolicy(Enum):
@@ -458,21 +459,27 @@ class Workflow(asyncio.Future):
         """
         # A workflow can be ran only once
         if self.tasks:
-            return
+            raise RuntimeError('a workflow can be run only once!')
+
         # Run the root task
-        root_tmpl = self._template.root()
-        # Automatically wrap input data into an event object
-        if not isinstance(data, Event):
-            event = Event(data=data)
-        else:
-            event = data
-        task = self._new_task(root_tmpl, event)
-        self._start = datetime.utcnow()
-        # The workflow may fail to start at once
-        if not task:
+        try:
+            root_tmpl = self._template.root()
+        except WorkflowRootTaskError as exc:
+            self._internal_exc = exc
             self._try_mark_done()
+            task = None
         else:
-            self.broker_event(WorkflowEvent.workflow_create, {})
+            self._dispatch_exec_event(WorkflowExecState.begin)
+            # Automatically wrap input data into an event object
+            if not isinstance(data, Event):
+                event = Event(data=data)
+            else:
+                event = data
+            task = self._new_task(root_tmpl, event)
+            self._start = datetime.utcnow()
+            # The workflow may fail to start at once
+            if not task:
+                self._try_mark_done()
         return task
 
     def _new_task(self, task_tmpl, event):
@@ -490,7 +497,6 @@ class Workflow(asyncio.Future):
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
-        self.broker_event(WorkflowEvent.task_create, data, task_id=task.uid)
         log.debug('new task created for %s', task_tmpl)
         done_cb = functools.partial(self._run_next_tasks, task_tmpl)
         task.add_done_callback(done_cb)
@@ -502,6 +508,7 @@ class Workflow(asyncio.Future):
         except AttributeError:
             exec_dict['id'] = None
         self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
+        self._dispatch_exec_event(WorkflowExecState.progress)
         return task
 
     def _join_task(self, next_task, event):
@@ -552,17 +559,18 @@ class Workflow(asyncio.Future):
         log.debug('%s filtered next tasks to: %s', task, filtered_tmpls)
         return filtered_tmpls
 
-    def broker_event(self, rtype, data, task_id=None):
+    def _dispatch_exec_event(self, etype, data=None):
         """
+        Workflow._dispatch_exec_event()
         Report a workflow execution step to the broker.
         """
-        self._broker.dispatch({
-            'type': rtype.value,
-            'task_id': task_id,
-            'template_id': self._template.uid,
-            'workflow_exec_id': self.uid,
-            'data': data
-        }, WorkflowEvent.topic())
+        # self._broker.dispatch({
+        #     'type': etype.value,
+        #     'task_id': task_id,
+        #     'template_id': self._template.uid,
+        #     'workflow_exec_id': self.uid,
+        #     'data': data
+        # }, WorkflowEvent.topic())
 
     def _run_next_tasks(self, task_tmpl, task):
         """
@@ -621,14 +629,19 @@ class Workflow(asyncio.Future):
         # done callback from another task executed in the same iteration of the
         # event loop.
         if self._all_tasks_done() and not self.done():
+            exec_event = WorkflowExecState.end
             if self._internal_exc:
                 self.set_exception(self._internal_exc)
+                exec_event = WorkflowExecState.error
+                data = {'error': str(self._internal_exc)}
             elif self._must_cancel:
                 super().cancel()
+                data = {'cancel': True}
             else:
                 self.set_result(self.tasks)
+                data = None
             self._end = datetime.utcnow()
-            self.broker_event(WorkflowEvent.workflow_end, {})
+            self._dispatch_exec_event(exec_event, data=data)
 
     def _all_tasks_done(self):
         """
@@ -732,6 +745,8 @@ class WorkflowInterface:
         If the task was triggered from within a workflow it MUST have at least
         one done callback that references the workflow itself.
         """
+        if task is None:
+            return None
         for cb in task._callbacks:
             # inspect.getcallargs() gives access to the implicit 'self' arg of
             # the bound method but it is marked as deprecated since
@@ -748,7 +763,7 @@ class WorkflowInterface:
                 continue
             if isinstance(inst, Workflow):
                 return inst
-        raise WorkflowNotFoundError
+        return None
 
     @classmethod
     def from_current_task(cls):

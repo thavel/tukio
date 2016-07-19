@@ -2,7 +2,8 @@ import asyncio
 import inspect
 from uuid import uuid4
 
-from .task import TaskRegistry
+from .task import TaskRegistry, TaskExecState
+from tukio.broker import get_broker, EXEC_TOPIC
 
 
 class TukioTask(asyncio.Task):
@@ -19,6 +20,43 @@ class TukioTask(asyncio.Task):
             self.uid = self.holder.uid
         except AttributeError:
             self.uid = str(uuid4())
+        self._broker = get_broker(self._loop)
+        self._in_progress = False
+
+    def in_progress(self):
+        """
+        Returns True if the task execution started, else returns False.
+        """
+        return self._in_progress
+
+    def set_result(self, result):
+        """
+        Wrapper around `Future.set_result()` to automatically dispatch a
+        `TaskExecState.end` event.
+        """
+        super().set_result(result)
+        data = {'type': TaskExecState.end.value, 'result': result}
+        self._broker.dispatch(data=data, topic=EXEC_TOPIC)
+
+    def set_exception(self, exception):
+        """
+        Wrapper around `Future.set_exception()` to automatically dispatch a
+        `TaskExecState.error` event.
+        """
+        super().set_exception(exception)
+        data = {'type': TaskExecState.error.value, 'error': exception}
+        self._broker.dispatch(data=data, topic=EXEC_TOPIC)
+
+    def _step(self, exc=None):
+        """
+        Wrapper around `Task._step()` to automatically dispatch a
+        `TaskExecState.begin` event.
+        """
+        super()._step(exc)
+        if not self._in_progress:
+            self._in_progress = True
+            data = {'type': TaskExecState.begin.value}
+            self._broker.dispatch(data=data, topic=EXEC_TOPIC)
 
 
 def tukio_factory(loop, coro):

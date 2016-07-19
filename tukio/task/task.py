@@ -10,6 +10,7 @@ execution of Tukio tasks in an asyncio event loop.
 import asyncio
 import logging
 import inspect
+from enum import Enum
 
 
 log = logging.getLogger(__name__)
@@ -92,3 +93,11 @@ def new_task(task_name, *, data=None, config=None, loop=None):
     else:
         coro = coro_fn(data)
     return asyncio.ensure_future(coro, loop=loop)
+
+
+class TaskExecState(Enum):
+
+    begin = 'task-begin'
+    end = 'task-end'
+    error = 'task-end'
+    progress = 'task-progress'
