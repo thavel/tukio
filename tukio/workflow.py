@@ -349,6 +349,7 @@ class WorkflowTemplate:
 def _current_workflow(func):
     """
     A decorator to maintain the dictionary of currently running workflows.
+    Inspired from the implementation of `asyncio.Task`.
     """
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
@@ -360,6 +361,32 @@ def _current_workflow(func):
     return wrapper
 
 
+def _get_workflow_from_task(task):
+    """
+    Looks for a method of `Workflow` among the done callbacks of the
+    asyncio task. Returns None if not found.
+    If the task was triggered from within a workflow it MUST have at least
+    one done callback that references the workflow itself.
+    """
+    for cb in task._callbacks:
+        # inspect.getcallargs() gives access to the implicit 'self' arg of
+        # the bound method but it is marked as deprecated since
+        # Python 3.5.1 and the new `inspect.Signature` object does NOT do
+        # the job :((
+        if inspect.ismethod(cb):
+            inst = cb.__self__
+        elif isinstance(cb, functools.partial):
+            try:
+                inst = cb.func.__self__
+            except AttributeError:
+                continue
+        else:
+            continue
+        if isinstance(inst, Workflow):
+            return inst
+    return None
+
+
 class Workflow(asyncio.Future):
 
     """
@@ -369,6 +396,22 @@ class Workflow(asyncio.Future):
 
     # Inspired from the implementation of `asyncio.Task`
     _current_workflows = {}
+
+    @classmethod
+    def current_workflow(cls, loop=None):
+        """
+        Returns the currently running workflow in an event loop or None.
+        By default the current workflow for the current event loop is returned.
+        None is returned when called not in the context of a Workflow.
+        """
+        loop = loop or asyncio.get_event_loop()
+        task = asyncio.Task.current_task(loop)
+        workflow = None
+        if task:
+            workflow = _get_workflow_from_task(task)
+        if not workflow:
+            workflow = cls._current_workflows.get(loop)
+        return workflow
 
     def __init__(self, wf_tmpl, *, loop=None, broker=None):
         super().__init__(loop=loop)
@@ -402,15 +445,6 @@ class Workflow(asyncio.Future):
     @property
     def policy(self):
         return self._template.policy
-
-    @classmethod
-    def current_workflow(cls, loop=None):
-        """Return the currently running workflow in an event loop or None.
-        By default the current workflow for the current event loop is returned.
-        None is returned when called not in the context of a Workflow.
-        """
-        loop = loop or asyncio.get_event_loop()
-        return cls._current_workflows.get(loop)
 
     @_current_workflow
     def unlock(self, _):

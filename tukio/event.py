@@ -5,7 +5,7 @@ workflows and tasks.
 import asyncio
 import collections
 
-from tukio.workflow import Workflow, WorkflowInterface
+from tukio.workflow import Workflow
 from tukio.task import TukioTask
 
 
@@ -33,13 +33,7 @@ class Event(_BaseEvent):
         context.
         """
         task = asyncio.Task.current_task()
-        if task:
-            try:
-                workflow = WorkflowInterface(task)._workflow
-            except AttributeError:
-                workflow = None
-        else:
-            workflow = Workflow.current_workflow()
+        workflow = Workflow.current_workflow()
         source = dict()
         if task and isinstance(task, TukioTask):
             source['task_template_id'] = task.template.uid
