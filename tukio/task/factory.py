@@ -40,7 +40,7 @@ class TukioTask(asyncio.Task):
         `TaskExecState.end` event.
         """
         super().set_result(result)
-        data = {'type': TaskExecState.end.value, 'result': result}
+        data = {'type': TaskExecState.end.value, 'content': result}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC)
 
     def set_exception(self, exception):
@@ -49,7 +49,7 @@ class TukioTask(asyncio.Task):
         `TaskExecState.error` event.
         """
         super().set_exception(exception)
-        data = {'type': TaskExecState.error.value, 'error': exception}
+        data = {'type': TaskExecState.error.value, 'content': exception}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC)
 
     def _step(self, exc=None):

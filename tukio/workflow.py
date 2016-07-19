@@ -9,7 +9,7 @@ from uuid import uuid4
 from tukio.dag import DAG
 from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName
 from tukio.utils import FutureState, Listen
-from tukio.broker import get_broker
+from tukio.broker import get_broker, EXEC_TOPIC
 from tukio.event import Event
 
 
@@ -346,12 +346,29 @@ class WorkflowTemplate:
         return "<WorkflowTemplate uid={}>".format(self.uid)
 
 
+def _current_workflow(func):
+    """
+    A decorator to maintain the dictionary of currently running workflows.
+    """
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        self.__class__._current_workflows[self._loop] = self
+        try:
+            func(self, *args, **kwargs)
+        finally:
+            self.__class__._current_workflows.pop(self._loop)
+    return wrapper
+
+
 class Workflow(asyncio.Future):
 
     """
     This class handles the execution of a workflow. Tasks are created along the
     way of workflow execution.
     """
+
+    # Inspired from the implementation of `asyncio.Task`
+    _current_workflows = {}
 
     def __init__(self, wf_tmpl, *, loop=None, broker=None):
         super().__init__(loop=loop)
@@ -386,6 +403,16 @@ class Workflow(asyncio.Future):
     def policy(self):
         return self._template.policy
 
+    @classmethod
+    def current_workflow(cls, loop=None):
+        """Return the currently running workflow in an event loop or None.
+        By default the current workflow for the current event loop is returned.
+        None is returned when called not in the context of a Workflow.
+        """
+        loop = loop or asyncio.get_event_loop()
+        return cls._current_workflows.get(loop)
+
+    @_current_workflow
     def unlock(self, _):
         """
         The concept of 'locked workflow' only applies when the overrun policy
@@ -426,6 +453,7 @@ class Workflow(asyncio.Future):
                                     topics=task_tmpl.topics)
         task.add_done_callback(done_cb)
 
+    @_current_workflow
     def _unregister_from_broker(self, callback, _, topics=None):
         """
         A very simple wrapper around `Broker.unregister()` to ignore the future
@@ -444,6 +472,7 @@ class Workflow(asyncio.Future):
         if self._internal_exc:
             self._cancel_all_tasks()
 
+    @_current_workflow
     def run(self, data):
         """
         Execute the workflow following the description passed at init.
@@ -489,8 +518,7 @@ class Workflow(asyncio.Future):
             self._cancel_all_tasks()
             return None
         log.debug('new task created for %s', task_tmpl)
-        done_cb = functools.partial(self._run_next_tasks, task_tmpl)
-        task.add_done_callback(done_cb)
+        task.add_done_callback(self._run_next_tasks)
         self.tasks.add(task)
         # Create the exec dict of the task
         exec_dict = {'start': datetime.utcnow()}
@@ -499,7 +527,6 @@ class Workflow(asyncio.Future):
         except AttributeError:
             exec_dict['id'] = None
         self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
-        self._dispatch_exec_event(WorkflowExecState.progress)
         return task
 
     def _join_task(self, next_task, event):
@@ -552,18 +579,14 @@ class Workflow(asyncio.Future):
 
     def _dispatch_exec_event(self, etype, data=None):
         """
-        Workflow._dispatch_exec_event()
-        Report a workflow execution step to the broker.
+        A shorthand to dispatch information about the workflow execution along
+        the way.
         """
-        # self._broker.dispatch({
-        #     'type': etype.value,
-        #     'task_id': task_id,
-        #     'template_id': self._template.uid,
-        #     'workflow_exec_id': self.uid,
-        #     'data': data
-        # }, WorkflowEvent.topic())
+        self._broker.dispatch({'type': etype.value, 'content': data},
+                              topic=EXEC_TOPIC)
 
-    def _run_next_tasks(self, task_tmpl, task):
+    @_current_workflow
+    def _run_next_tasks(self, task):
         """
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
@@ -578,20 +601,26 @@ class Workflow(asyncio.Future):
         try:
             result = task.result()
         except Exception as exc:
-            log.warning('task %s ended on exception', task_tmpl)
+            log.warning('task %s ended on exception', task.template)
             log.exception(exc)
         else:
-            self.broker_event(
-                WorkflowEvent.task_end,
-                {'result': result},
-                task_id=task.uid
-            )
-            next_tmpls = self._get_next_task_templates(task_tmpl, task)
-            # Automatically wrap data from parent task into an event object
+            next_tmpls = self._get_next_task_templates(task.template, task)
+
+            # Wrap result from parent task into an event object
             if not isinstance(result, Event):
-                event = Event(data=result, from_task=task_tmpl.uid)
+                # The source of the event cannot be infered from the current
+                # context (the task is done), but we still have everything to
+                # build a proper event source.
+                source = EventSource(
+                    workflow_template_id=self.template.uid,
+                    workflow_exec_id=self.uid,
+                    task_template_id=task.template.uid,
+                    task_exec_id=task.uid
+                )
+                event = Event(data=result, source=source)
             else:
-                event = Event(data=result.data, from_task=task_tmpl.uid)
+                event = result
+
             for tmpl in next_tmpls:
                 next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
                 if next_task:
@@ -624,7 +653,7 @@ class Workflow(asyncio.Future):
             if self._internal_exc:
                 self.set_exception(self._internal_exc)
                 exec_event = WorkflowExecState.error
-                data = {'error': str(self._internal_exc)}
+                data = self._internal_exc
             elif self._must_cancel:
                 super().cancel()
                 data = {'cancel': True}
@@ -736,8 +765,6 @@ class WorkflowInterface:
         If the task was triggered from within a workflow it MUST have at least
         one done callback that references the workflow itself.
         """
-        if task is None:
-            return None
         for cb in task._callbacks:
             # inspect.getcallargs() gives access to the implicit 'self' arg of
             # the bound method but it is marked as deprecated since

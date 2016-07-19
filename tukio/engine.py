@@ -8,7 +8,7 @@ from tukio.workflow import OverrunPolicy, new_workflow, Workflow
 from tukio.broker import get_broker
 from tukio.task import tukio_factory
 from tukio.utils import Listen
-from tukio.event import Event
+from tukio.event import Event, EventSource
 
 
 log = logging.getLogger(__name__)
@@ -235,7 +235,7 @@ class Engine(asyncio.Future):
         and may trigger new workflow executions.
         """
         log.debug("data received: %s (topic=%s)", data, topic)
-        event = Event(data=data, topic=topic)
+        event = Event(data=data, source=EventSource(topic=topic))
         # Disptatch data to 'listening' tasks at all cases
         self._broker.dispatch(event, topic)
         # Don't start new workflow instances if `stop()` was called.

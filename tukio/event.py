@@ -5,7 +5,7 @@ workflows and tasks.
 import asyncio
 import collections
 
-from tukio.workflow import WorkflowInterface
+from tukio.workflow import Workflow, WorkflowInterface
 from tukio.task import TukioTask
 
 
@@ -33,16 +33,27 @@ class Event(_BaseEvent):
         context.
         """
         task = asyncio.Task.current_task()
-        workflow = WorkflowInterface(task)
+        if task:
+            try:
+                workflow = WorkflowInterface(task)._workflow
+            except AttributeError:
+                workflow = None
+        else:
+            workflow = Workflow.current_workflow()
         source = dict()
         if task and isinstance(task, TukioTask):
             source['task_template_id'] = task.template.uid
             source['task_exec_id'] = task.uid
         if workflow:
-            source['workflow_template_id'] = workflow._workflow.template.uid
-            source['workflow_exec_id'] = workflow._workflow.uid
-        source['topic'] = topic
-        return cls(data=data, source=EventSource(**source))
+            source['workflow_template_id'] = workflow.template.uid
+            source['workflow_exec_id'] = workflow.uid
+        if topic:
+            source['topic'] = topic
+        if source:
+            event_source = EventSource(**source)
+        else:
+            event_source = None
+        return cls(data=data, source=event_source)
 
 
 _BaseEventSource = collections.namedtuple(
