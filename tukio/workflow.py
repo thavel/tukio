@@ -447,7 +447,7 @@ class Workflow(asyncio.Future):
         return self._template.policy
 
     @_current_workflow
-    def unlock(self, _):
+    def _unlock(self, _):
         """
         The concept of 'locked workflow' only applies when the overrun policy
         is set to 'skip-until-unlock'. Once the workflow is unlocked, a new
@@ -455,6 +455,14 @@ class Workflow(asyncio.Future):
         """
         if self.lock.locked():
             self.lock.release()
+
+    def unlock_when_task_done(self, task=None):
+        """
+        Adds a done callback to the passed or current task so as to unlock the
+        workflow when the task gets done.
+        """
+        task = task or asyncio.Task.current_task()
+        task.add_done_callback(self._unlock)
 
     def _register_to_broker(self, task_tmpl, task):
         """
@@ -576,17 +584,6 @@ class Workflow(asyncio.Future):
             self._cancel_all_tasks()
             return False
         return True
-
-    def _set_next_task_templates(self, task, next_tmpl_ids):
-        """
-        Defines the set of downstream tasks that should be executed right after
-        `task`. This method is intended to be called at runtime by the task
-        itself. `next_tmpl_ids` must be a list (can be empty) of task template
-        IDs.
-        It may be used to dynamically update (at runtime) the tasks that will
-        be executed by the workflow after `task`.
-        """
-        self._updated_next_tasks[task] = next_tmpl_ids
 
     def _get_next_task_templates(self, task_tmpl, task):
         """
@@ -721,6 +718,20 @@ class Workflow(asyncio.Future):
                 cancelled += 1
         return cancelled
 
+    def set_next_tasks(self, task_tmpl_ids):
+        """
+        By default the workflow runs all downstream tasks once the current task
+        is done. This method allows to select the tasks that will be actually
+        ran and disables other tasks (unless they're already running).
+
+        This method is intended to be called at runtime by the task itself.
+        `task_tmpl_ids` must be a list (can be empty) of task template IDs.
+        """
+        task = asyncio.Task.current_task(self._loop)
+        if task not in self.tasks:
+            raise RuntimeError('task {} not executed by {}'.format(task, self))
+        self._updated_next_tasks[task] = task_tmpl_ids
+
     def cancel(self):
         """
         Cancel the workflow by cancelling all pending tasks (aka all tasks not
@@ -778,73 +789,3 @@ def new_workflow(wf_tmpl, running=None, loop=None):
     """
     policy_handler = OverrunPolicyHandler(wf_tmpl, loop=loop)
     return policy_handler.new_workflow(running)
-
-
-class WorkflowInterface:
-
-    """
-    An object intended to be used from within tasks at runtime. It provides
-    methods to interact with the `Workflow` instance that is controlling the
-    task.
-    """
-
-    def __init__(self, task):
-        self.task = task
-        self._workflow = self._get_workflow(self.task)
-
-    def _get_workflow(self, task):
-        """
-        Looks for an instance of `Workflow` among the done callbacks of the
-        asyncio task. Raises a `WorkflowNotFoundError` if not found.
-        If the task was triggered from within a workflow it MUST have at least
-        one done callback that references the workflow itself.
-        """
-        for cb in task._callbacks:
-            # inspect.getcallargs() gives access to the implicit 'self' arg of
-            # the bound method but it is marked as deprecated since
-            # Python 3.5.1 and the new `inspect.Signature` object does NOT do
-            # the job :((
-            if inspect.ismethod(cb):
-                inst = cb.__self__
-            elif isinstance(cb, functools.partial):
-                try:
-                    inst = cb.func.__self__
-                except AttributeError:
-                    continue
-            else:
-                continue
-            if isinstance(inst, Workflow):
-                return inst
-        return None
-
-    @classmethod
-    def from_current_task(cls):
-        """
-        Returns an instance of `WorkflowInterface` from the current task.
-        """
-        return cls(asyncio.Task.current_task())
-
-    def unlock_when_done(self):
-        """
-        Adds a done callback to the current task so as to unlock the workflow
-        that handles its execution when the task gets done.
-        """
-        self.task.add_done_callback(self._workflow.unlock)
-
-    def set_next_tasks(self, task_ids):
-        """
-        By default the workflow runs all downstream tasks once the current task
-        is done. This method allows to select the tasks that will be actually
-        ran and disables other tasks (unless they're already running).
-        """
-        self._workflow._set_next_task_templates(self.task, task_ids)
-
-    def update_status(self, data):
-        """
-        Throw a task update information payload to the broker.
-        """
-        self._workflow.broker_event(
-            WorkflowEvent.task_update,
-            data,
-            task_id=self.task.uid
-        )
