@@ -30,12 +30,6 @@ class WorkflowRootTaskError(WorkflowError):
         return 'expected one root task, found {}'.format(self._value)
 
 
-class WorkflowNotFoundError(WorkflowError):
-
-    def __str__(self):
-        return 'no workfow bound to the task, cannot unlock it!'
-
-
 class TemplateGraphError(WorkflowError):
 
     def __init__(self, key):
