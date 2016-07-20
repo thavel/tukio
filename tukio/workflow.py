@@ -7,10 +7,10 @@ import logging
 from uuid import uuid4
 
 from tukio.dag import DAG
-from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName
+from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName, TukioTask
 from tukio.utils import FutureState, Listen
 from tukio.broker import get_broker, EXEC_TOPIC
-from tukio.event import Event
+from tukio.event import Event, EventSource
 
 
 log = logging.getLogger(__name__)
@@ -363,11 +363,18 @@ def _current_workflow(func):
 
 def _get_workflow_from_task(task):
     """
-    Looks for a method of `Workflow` among the done callbacks of the
-    asyncio task. Returns None if not found.
-    If the task was triggered from within a workflow it MUST have at least
-    one done callback that references the workflow itself.
+    Looks for an instance of `Workflow` linked to the task or a method of
+    `Workflow` among the done callbacks of the asyncio task. Returns None if
+    not found.
+    If the task was triggered from within a workflow it MUST have a `workflow`
+    attribute that points to it and at least one done callback that is a method
+    of `Workflow`.
     """
+    if isinstance(task, TukioTask):
+        workflow = task.workflow
+    if workflow:
+        return workflow
+
     for cb in task._callbacks:
         # inspect.getcallargs() gives access to the implicit 'self' arg of
         # the bound method but it is marked as deprecated since
@@ -437,6 +444,10 @@ class Workflow(asyncio.Future):
             self.lock._locked = True
         # Work with an event broker
         self._broker = broker or get_broker(self._loop)
+        self._source = EventSource(
+            workflow_template_id=self._template.uid,
+            workflow_exec_id=self.uid
+        )
 
     @property
     def template(self):
@@ -559,6 +570,8 @@ class Workflow(asyncio.Future):
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
+        if isinstance(task, TukioTask):
+            task._workflow = self
         log.debug('new task created for %s', task_tmpl)
         task.add_done_callback(self._run_next_tasks)
         self.tasks.add(task)
@@ -614,7 +627,7 @@ class Workflow(asyncio.Future):
         the way.
         """
         self._broker.dispatch({'type': etype.value, 'content': data},
-                              topic=EXEC_TOPIC)
+                              topic=EXEC_TOPIC, source=self._source)
 
     @_current_workflow
     def _run_next_tasks(self, task):
@@ -639,9 +652,6 @@ class Workflow(asyncio.Future):
 
             # Wrap result from parent task into an event object
             if not isinstance(result, Event):
-                # The source of the event cannot be infered from the current
-                # context (the task is done), but we still have everything to
-                # build a proper event source.
                 source = EventSource(
                     workflow_template_id=self.template.uid,
                     workflow_exec_id=self.uid,

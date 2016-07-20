@@ -235,7 +235,7 @@ class Engine(asyncio.Future):
         and may trigger new workflow executions.
         """
         log.debug("data received: %s (topic=%s)", data, topic)
-        event = Event(data=data, source=EventSource(topic=topic))
+        event = Event(data=data, topic=topic)
         # Disptatch data to 'listening' tasks at all cases
         self._broker.dispatch(event, topic)
         # Don't start new workflow instances if `stop()` was called.

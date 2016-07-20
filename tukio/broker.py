@@ -53,7 +53,7 @@ class Broker(object):
         self._global_handlers = set()
         self._topic_handlers = dict()
 
-    def dispatch(self, data, topic=None):
+    def dispatch(self, data, topic=None, source=None):
         """
         Passes an event (aka the data) received to the right handlers.
         If topic is not None, the event is dispatched to handlers registered
@@ -64,16 +64,22 @@ class Broker(object):
         """
         # Always call registered global handlers
         handlers = self._global_handlers
+
+        # Automatically wrap input data into an event object
+        if not isinstance(data, Event):
+            event = Event(data, topic=topic, source=source)
+        else:
+            event = data
+        # Use the topic from the event if the topic passed as argument is None
+        topic = topic or event.topic
+
         if topic is not None:
             try:
                 handlers = handlers | self._topic_handlers[topic]
             except KeyError:
                 pass
-        # Automatically wrap input data into an event object
-        if not isinstance(data, Event):
-            event = Event.from_context(data, topic)
-        else:
-            event = data
+
+        # Schedule the execution of all registered handlers
         for handler in handlers:
             if asyncio.iscoroutinefunction(handler):
                 asyncio.ensure_future(handler(event), loop=self._loop)

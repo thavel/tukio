@@ -111,6 +111,7 @@ def dispatch_progress(data, broker=None):
     tukio task.
     """
     broker = broker or get_broker()
+    task = asyncio.Task.current_task()
     event_data = {'type': TaskExecState.progress.value}
     event_data['content'] = data
-    broker.dispatch(event_data, topic=EXEC_TOPIC)
+    broker.dispatch(event_data, topic=EXEC_TOPIC, source=task.event_source)
