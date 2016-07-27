@@ -25,8 +25,8 @@ A workflow is basically a collection of tasks executed sequentially starting
 from the root task.
 
 #### Engine
-Its triggers workflows upon receiving new data and can control the execution of
-hunderds of concurrent workflows.
+It triggers workflows upon receiving new data and can control the execution of
+hundreds of concurrent workflows.
 
 #### Broker, events and topics
 Tukio implements a simple broker that can disptach events in topics. A topic
@@ -41,7 +41,7 @@ Tukio provides classes to define tasks and workflows. Such objects are called
 task/workflow _templates_ whereas the execution of workflows/tasks is done in
 _instances_. An instance of workflow uses the description of the workflow - the
 workflow template - to run the right tasks. A task may use a configuration -
-from the task template - to execute properly.
+from the task template - to run properly.
 
 ## Workflow configuration
 
@@ -57,7 +57,7 @@ The description of a workflow is pretty straighforward:
         {"id": "f3", "name": "task3"},
         {"id": "f4", "name": "task1"},
         {"id": "f5", "name": "task2"},
-        {"id": "f6", "name": "task1"}
+        {"id": "f6", "name": "task1", "config": {"value": 1}}
     ],
     "graph": {
         "f1": ["f2"],
