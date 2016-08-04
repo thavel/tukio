@@ -140,3 +140,53 @@ def get_broker(loop=None):
     """
     loop = loop or asyncio.get_event_loop()
     return _BrokerRegistry.get(loop)
+
+
+class TopicManager:
+
+    """
+    A context manager to subscribe and unsubscribe to topics while executing
+    a task.
+    """
+
+    def __init__(self, topic, *, loop=None):
+        self._loop = loop or asyncio.get_event_loop()
+        self._topic = topic
+
+    @classmethod
+    def subscribe(cls, topic=None):
+        """
+        A shorthand method to register the standard `TukioTask.data_received`
+        coroutine with a new topic in the data broker.
+        This is an easy way to get events from a new topic into the receiving
+        queue.
+        """
+        # Override topic and loop with the values passed at init when used as a
+        # regular instance method.
+        loop = cls._loop if isinstance(cls, TopicManager) else None
+        if isinstance(cls, TopicManager):
+            topic = cls._topic
+        coro = asyncio.Task.current_task(loop=loop).data_received
+        get_broker(loop=loop).register(coro, topic=topic)
+
+    def __enter__(self):
+        self.subscribe(self._topic)
+
+    @classmethod
+    def unsubscribe(cls, topic=None):
+        """
+        A shorthand method to unregister the standard `TukioTask.data_received`
+        coroutine associated with the given topic in the data broker.
+        Once unsubscribed, no new event from that topic will be put into the
+        receiving queue.
+        """
+        # Override topic and loop with the values passed at init when used as a
+        # regular instance method.
+        loop = cls._loop if isinstance(cls, TopicManager) else None
+        if isinstance(cls, TopicManager):
+            topic = cls._topic
+        coro = asyncio.Task.current_task(loop=loop).data_received
+        get_broker(loop=loop).unregister(coro, topic=topic)
+
+    def __exit__(self, *exc):
+        self.unsubscribe(self._topic)

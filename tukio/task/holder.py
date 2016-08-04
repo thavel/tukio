@@ -25,8 +25,6 @@ Which turns into a more compact class when you inherit your own class from
 """
 from uuid import uuid4
 
-from tukio.broker import get_broker
-
 
 class TaskHolder:
 
@@ -52,16 +50,6 @@ class TaskHolder:
         # to will land into that queue.
         # This `queue` attribute is auto set by `TukioTask` at init.
         self.queue = None
-
-    def subscribe(self, topic):
-        """
-        A shorthand method to register the standard `TukioTask.data_received`
-        coroutine with a new topic in the data broker.
-        This is an easy way to get events from a new topic into the receiving
-        queue.
-        """
-        coro = asyncio.Task.current_task().data_received
-        get_broker().register(coro, topic=topic)
 
     def report(self):
         """
