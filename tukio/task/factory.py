@@ -26,6 +26,9 @@ class TukioTask(asyncio.Task):
         self._template = None
         self._workflow = None
         self._source = None
+        self._queue = asyncio.Queue(loop=self._loop)
+        if self.holder:
+            self.holder.queue = self._queue
 
     @property
     def template(self):
@@ -38,6 +41,18 @@ class TukioTask(asyncio.Task):
     @property
     def event_source(self):
         return self._source
+
+    @property
+    def queue(self):
+        return self._queue
+
+    async def data_received(self, event):
+        """
+        A handler that puts events into the task's own receiving queue. This
+        handler shall be registered in the data broker so that any tukio task
+        can receive and process events during execution.
+        """
+        await self._queue.put(event)
 
     def in_progress(self):
         """

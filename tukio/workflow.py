@@ -311,8 +311,8 @@ class WorkflowTemplate:
     def validate(self):
         """
         Validate the current workflow template. At that point, we already know
-        the underlying DAG is valid. This methods ensures there's a single
-        root task and all task names are registered tasks.
+        the underlying DAG is valid. This method ensures there's a single root
+        task and all task names are registered tasks.
         If not valid, this method should raise either `WorkflowRootTaskError`
         or `UnknownTaskName` exceptions.
         """
@@ -320,17 +320,7 @@ class WorkflowTemplate:
         if root_nodes != 1:
             raise WorkflowRootTaskError(root_nodes)
         for task in self.tasks:
-            klass, _ = TaskRegistry.get(task.name)
-            # Check there's a `data_received` callback if the task is
-            # configured receive data during execution.
-            if (task.listen is not Listen.nothing and
-               not hasattr(klass, 'data_received')):
-                # Warn the user but don't raise an exception otherwise this
-                # would force the user to explicitely configure each
-                # coroutine-based tasks with {"topics": []}
-                log.warning("CAUTION: task '%s' has no callback to receive "
-                            "data during execution, will be ignored!",
-                            task.name)
+            TaskRegistry.get(task.name)
         return True
 
     def __str__(self):
@@ -479,14 +469,12 @@ class Workflow(asyncio.Future):
         if listen is Listen.nothing:
             return
 
-        # Try to register a callback, otherwise returns.
-        # Note: a warning message must have warned the user on loading the
-        # template in the engine.
+        # A tukio task always has a 'data_received' method
         try:
-            callback = task.holder.data_received
+            callback = task.data_received
         except AttributeError as exc:
-            log.debug('no callback to register in broker (%s), ignored', exc)
-            return
+            task.set_exception(exc)
+            raise
 
         # Register the callback in the event broker
         if listen is Listen.everything:
@@ -553,19 +541,19 @@ class Workflow(asyncio.Future):
         """
         Each new task must be created successfully, else the whole workflow
         shall stop running (wrong workflow config or bug).
+        It is assumed all tasks are tukio tasks (aka `TukioTask` objects).
         """
         try:
             task = task_tmpl.new_task(event, loop=self._loop)
             # Register the `data_received` callback (if required) as soon as
             # the execution of the task is scheduled.
             self._register_to_broker(task_tmpl, task)
-        except (UnknownTaskName, TypeError, ValueError) as exc:
+        except (UnknownTaskName, TypeError, ValueError, AttributeError) as exc:
             log.error('failed to create task from template: %s', task_tmpl)
             self._internal_exc = exc
             self._cancel_all_tasks()
             return None
-        if isinstance(task, TukioTask):
-            task._workflow = self
+        task._workflow = self
         log.debug('new task created for %s', task_tmpl)
         task.add_done_callback(self._run_next_tasks)
         self.tasks.add(task)
