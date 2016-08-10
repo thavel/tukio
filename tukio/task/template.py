@@ -17,7 +17,7 @@ class TaskTemplate:
     `asyncio.Task`) and provide execution report.
     """
 
-    def __init__(self, name, uid=None, config=None, topics=None):
+    def __init__(self, name, uid=None, config=None, topics=[]):
         self.name = name
         self.config = config or {}
         self.topics = topics
@@ -64,7 +64,7 @@ class TaskTemplate:
         uid = task_dict.get('id')
         name = task_dict['name']
         config = task_dict.get('config', {})
-        topics = task_dict.get('topics')
+        topics = task_dict.get('topics', [])
         return cls(name, uid=uid, config=config, topics=topics)
 
     def as_dict(self):
