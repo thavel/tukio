@@ -571,14 +571,8 @@ class Workflow(asyncio.Future):
         Pass an event to a downstream task that has already been started (by
         another parent). In such a situation, it is known to be a join task.
         """
-        try:
-            # `data_received()` must be a simple callback (not a coroutine)
-            next_task.holder.data_received(event)
-        except AttributeError as exc:
-            self._internal_exc = exc
-            self._cancel_all_tasks()
-            return False
-        return True
+        # Push event into next_task's event queue
+        asyncio.ensure_future(next_task.data_received(event))
 
     def _get_next_task_templates(self, task_tmpl, task):
         """
@@ -651,9 +645,7 @@ class Workflow(asyncio.Future):
                     if next_task.done():
                         continue
                     # Downstream task already running, join it!
-                    joined = self._join_task(next_task, event)
-                    if not joined:
-                        break
+                    self._join_task(next_task, event)
                 # Create new task
                 else:
                     next_task = self._new_task(tmpl, event)
