@@ -21,37 +21,39 @@ class JoinTask(TaskHolder):
         super().__init__(config)
         self._unlock = asyncio.Event()
         self._data_stash = []
-        # Don't wait for other tasks if not specified
-        self._wait_for = list(self.config.get('wait_for', []))
+        # Can be a number of tasks or a list of ids
+        self._wait_for = self.config['wait_for']
         self._timeout = self.config.get('timeout')
 
     async def execute(self, event):
         log.info(
-            'join task waiting for %s (timeout: %s)',
-            self._wait_for,
-            self._timeout
+            'Join task waiting for tasks (%s) (timeout: %s)',
+            self._wait_for, self._timeout
         )
+        # Trigger data_received for this event
         self.data_received(event)
         try:
             await asyncio.wait_for(self._unlock.wait(), self._timeout)
         except asyncio.TimeoutError:
-            log.warning("join timeout, still waiting for %s", self._wait_for)
+            log.warning("Join timed out, still waiting for %s", self._wait_for)
         else:
-            log.debug('all awaited parents joined')
+            log.debug('All awaited parents joined')
         return self._data_stash
 
     def data_received(self, event):
-        """
-        Called when the task is already started and a new parent just finished.
-        """
-        from_task = event.from_task
-        data = event.data
-        if from_task is None:
-            log.warning("join task received data from unknown task: %s", event)
+        task_id = event.source.task_template_id
+        log.debug("Task with id '%s' joined", task_id)
+        # Check if wait for a number of tasks
+        if isinstance(self._wait_for, int):
+            self._wait_for -= 1
+            if self._wait_for == 0:
+                self._unlock.set()
+        # Else, wait for list of ids
+        elif isinstance(self._wait_for, list) and task_id in self._wait_for:
+            self._wait_for.remove(task_id)
+            if len(self._wait_for) == 0:
+                self._unlock.set()
+        else:
+            # Don't stash unrelevant data
             return
-        log.debug("parent task '%s' joined with data: %s", from_task, data)
-        self._data_stash.append(data)
-        if from_task in self._wait_for:
-            self._wait_for.remove(from_task)
-        if len(self._wait_for) == 0:
-            self._unlock.set()
+        self._data_stash.append(event.data)
