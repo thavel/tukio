@@ -21,7 +21,7 @@ class JoinTask(TaskHolder):
         super().__init__(config)
         self._data_stash = []
         # Must be either a number of tasks or a list of ids
-        self._wait_for = self.config['wait_for']
+        self._wait_for = None  # To be set later on to avoid modification
         self._timeout = self.config.get('timeout')
 
     def _step(self, event):
@@ -47,6 +47,7 @@ class JoinTask(TaskHolder):
                 return
 
     async def execute(self, event):
+        self._wait_for = list(self.config['wait_for'])
         log.info(
             'Join task waiting for tasks (%s) (timeout: %s)',
             self._wait_for, self._timeout
