@@ -33,15 +33,12 @@ class JoinTask(TaskHolder):
         if isinstance(self._wait_for, int):
             self._data_stash.append(event.data)
             self._wait_for -= 1
-            if self._wait_for == 0:
-                return True
+            return self._wait_for == 0
         # Else, wait for list of ids
         elif isinstance(self._wait_for, list) and task_id in self._wait_for:
             self._data_stash.append(event.data)
             self._wait_for.remove(task_id)
-            if len(self._wait_for) == 0:
-                return True
-        return False
+            return len(self._wait_for) == 0
 
     async def _wait_for_tasks(self):
         while True:
