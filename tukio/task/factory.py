@@ -26,6 +26,7 @@ class TukioTask(asyncio.Task):
         self._template = None
         self._workflow = None
         self._source = None
+        self._initial_data = None
         self._queue = asyncio.Queue(loop=self._loop)
         if self.holder:
             self.holder.queue = self._queue
@@ -92,9 +93,11 @@ class TukioTask(asyncio.Task):
                 source['workflow_exec_id'] = self._workflow.uid
             self._source = EventSource(**source)
             self._in_progress = True
-            data = {'type': TaskExecState.begin.value}
-            self._broker.dispatch(data=data, topic=EXEC_TOPIC,
-                                  source=self._source)
+            data = {
+                'type': TaskExecState.begin.value,
+                'content': self._initial_data
+            }
+            self._broker.dispatch(data, topic=EXEC_TOPIC, source=self._source)
         super()._step(exc)
 
 

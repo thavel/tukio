@@ -2,6 +2,7 @@ import logging
 from uuid import uuid4
 
 from .task import new_task
+from tukio.event import Event
 from tukio.utils import Listen
 
 
@@ -33,6 +34,7 @@ class TaskTemplate:
         """
         task = new_task(self.name, data=data, config=self.config, loop=loop)
         task._template = self
+        task._initial_data = data.data if isinstance(data, Event) else data
         return task
 
     @classmethod

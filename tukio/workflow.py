@@ -524,7 +524,7 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
             task = None
         else:
-            self._dispatch_exec_event(WorkflowExecState.begin)
+            self._dispatch_exec_event(WorkflowExecState.begin, data)
             # Automatically wrap input data into an event object
             if not isinstance(data, Event):
                 event = Event(data=data)
