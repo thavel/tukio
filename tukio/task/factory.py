@@ -32,22 +32,22 @@ class TukioTask(asyncio.Task):
         self._source = None
         self._start = None
         self._end = None
-        self._initial_data = None
-        self._final_data = None
+        self._inputs = None
+        self._outputs = None
         self._queue = asyncio.Queue(loop=self._loop)
         if self.holder:
             self.holder.queue = self._queue
 
     @property
-    def initial_data(self):
-        return self._initial_data
+    def inputs(self):
+        return self._inputs
 
-    @initial_data.setter
-    def initial_data(self, data):
+    @inputs.setter
+    def inputs(self, data):
         if isinstance(data, Event):
-            self._initial_data = deepcopy(data.data)
+            self._inputs = deepcopy(data.data)
         else:
-            self._initial_data = deepcopy(data)
+            self._inputs = deepcopy(data)
 
     @property
     def template(self):
@@ -74,8 +74,8 @@ class TukioTask(asyncio.Task):
             'start': self._start,
             'end': self._end,
             'state': FutureState.get(self).value,
-            'initial_data': self._initial_data,
-            'final_data': self._final_data
+            'inputs': self._inputs,
+            'outputs': self._outputs
         }
 
     async def data_received(self, event):
@@ -99,11 +99,11 @@ class TukioTask(asyncio.Task):
         """
         super().set_result(result)
         if isinstance(result, Event):
-            self._final_data = deepcopy(result.data)
+            self._outputs = deepcopy(result.data)
         else:
-            self._final_data = deepcopy(result)
+            self._outputs = deepcopy(result)
         self._end = datetime.utcnow()
-        data = {'type': TaskExecState.end.value, 'content': self._final_data}
+        data = {'type': TaskExecState.end.value, 'content': self._outputs}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
 
     def set_exception(self, exception):
@@ -133,7 +133,7 @@ class TukioTask(asyncio.Task):
             self._in_progress = True
             data = {
                 'type': TaskExecState.begin.value,
-                'content': self._initial_data
+                'content': self._inputs
             }
             self._broker.dispatch(data, topic=EXEC_TOPIC, source=self._source)
         super()._step(exc)
