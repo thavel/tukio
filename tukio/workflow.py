@@ -753,6 +753,9 @@ class Workflow(asyncio.Future):
                 task_dict.update({'exec': None})
                 continue
             exec_dict['state'] = FutureState.get(task).value
+            exec_dict['initial_data'] = task._initial_data
+            if exec_dict['state'] == FutureState.finished.value:
+                exec_dict['final_data'] = task.result()
             # If the task is linked to a task holder, try to use its own report
             try:
                 task_report = task.holder.report()
