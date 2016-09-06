@@ -1,10 +1,14 @@
 import asyncio
+from copy import deepcopy
+from datetime import datetime
 import inspect
 from uuid import uuid4
 
-from .task import TaskRegistry, TaskExecState
 from tukio.broker import get_broker, EXEC_TOPIC
-from tukio.event import EventSource
+from tukio.event import EventSource, Event
+from tukio.utils import FutureState
+
+from .task import TaskRegistry, TaskExecState
 
 
 class TukioTask(asyncio.Task):
@@ -26,10 +30,24 @@ class TukioTask(asyncio.Task):
         self._template = None
         self._workflow = None
         self._source = None
+        self._start = None
+        self._end = None
         self._initial_data = None
+        self._final_data = None
         self._queue = asyncio.Queue(loop=self._loop)
         if self.holder:
             self.holder.queue = self._queue
+
+    @property
+    def initial_data(self):
+        return self._initial_data
+
+    @initial_data.setter
+    def initial_data(self, data):
+        if isinstance(data, Event):
+            self._initial_data = deepcopy(data.data)
+        else:
+            self._initial_data = deepcopy(data)
 
     @property
     def template(self):
@@ -46,6 +64,19 @@ class TukioTask(asyncio.Task):
     @property
     def queue(self):
         return self._queue
+
+    def as_dict(self):
+        """
+        Returns the execution informations of this task.
+        """
+        return {
+            'id': self.uid,
+            'start': self._start,
+            'end': self._end,
+            'state': FutureState.get(self).value,
+            'initial_data': self._initial_data,
+            'final_data': self._final_data
+        }
 
     async def data_received(self, event):
         """
@@ -67,7 +98,12 @@ class TukioTask(asyncio.Task):
         `TaskExecState.end` event.
         """
         super().set_result(result)
-        data = {'type': TaskExecState.end.value, 'content': result}
+        if isinstance(result, Event):
+            self._final_data = deepcopy(result.data)
+        else:
+            self._final_data = deepcopy(result)
+        self._end = datetime.utcnow()
+        data = {'type': TaskExecState.end.value, 'content': self._final_data}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
 
     def set_exception(self, exception):
@@ -76,6 +112,7 @@ class TukioTask(asyncio.Task):
         `TaskExecState.error` event.
         """
         super().set_exception(exception)
+        self._end = datetime.utcnow()
         data = {'type': TaskExecState.error.value, 'content': exception}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
 
@@ -85,6 +122,7 @@ class TukioTask(asyncio.Task):
         `TaskExecState.begin` event.
         """
         if not self._in_progress:
+            self._start = datetime.utcnow()
             source = {'task_exec_id': self.uid}
             if self._template:
                 source['task_template_id'] = self._template.uid

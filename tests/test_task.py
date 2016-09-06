@@ -331,6 +331,7 @@ class TestTaskFactory(unittest.TestCase):
         self.assertIsInstance(task, TukioTask)
         res = self.loop.run_until_complete(task)
         self.assertEqual(res, MY_TASK_HOLDER_RES)
+        self.assertEqual(task._final_data, MY_TASK_HOLDER_RES)
 
         # Create and run a `TukioTask` from a registered coroutine
         task = asyncio.ensure_future(my_coro_task(None))
@@ -490,11 +491,13 @@ class TestTaskTemplate(unittest.TestCase):
         task_tmpl = TaskTemplate('my-task-holder')
         task = task_tmpl.new_task('dummy-data', loop=self.loop)
         self.assertIsInstance(task, TukioTask)
+        self.assertEqual(task.initial_data, 'dummy-data')
 
         # Also works with a registered coroutine
         task_tmpl = TaskTemplate('dummy-coro')
         task = task_tmpl.new_task(data='junk-data', loop=self.loop)
         self.assertIsInstance(task, TukioTask)
+        self.assertEqual(task.initial_data, 'junk-data')
 
     def test_new_task_unknown(self):
         """

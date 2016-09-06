@@ -287,11 +287,11 @@ class WorkflowTemplate:
         template object.
         """
         wf_dict = {
-            "id": self.uid,
-            "policy": self.policy.value,
-            "topics": self.topics,
-            "tasks": [],
-            "graph": {}
+            'id': self.uid,
+            'policy': self.policy.value,
+            'topics': self.topics,
+            'tasks': [],
+            'graph': {}
         }
         for task_tmpl in self.tasks:
             wf_dict['tasks'].append(task_tmpl.as_dict())
@@ -327,7 +327,7 @@ class WorkflowTemplate:
         """
         Human readable string representation of a workflow template.
         """
-        return "<WorkflowTemplate uid={}>".format(self.uid)
+        return '<WorkflowTemplate uid={}>'.format(self.uid)
 
 
 def _current_workflow(func):
@@ -558,12 +558,7 @@ class Workflow(asyncio.Future):
         task.add_done_callback(self._run_next_tasks)
         self.tasks.add(task)
         # Create the exec dict of the task
-        exec_dict = {'start': datetime.utcnow()}
-        try:
-            exec_dict['id'] = task.uid
-        except AttributeError:
-            exec_dict['id'] = None
-        self._tasks_by_id[task_tmpl.uid] = (task, exec_dict)
+        self._tasks_by_id[task_tmpl.uid] = task
         return task
 
     def _join_task(self, next_task, event):
@@ -731,7 +726,7 @@ class Workflow(asyncio.Future):
         """
         Readable string representation of a workflow execution object.
         """
-        string = "<Workflow template.uid={}, uid={}, start={}, end={}>"
+        string = '<Workflow template.uid={}, uid={}, start={}, end={}>'
         return string.format(self._template.uid, self.uid,
                              self._start, self._end)
 
@@ -740,22 +735,21 @@ class Workflow(asyncio.Future):
         Creates and returns a complete execution report, including workflow and
         tasks templates and execution details.
         """
-        wf_exec = {"id": self.uid, "start": self._start, "end": self._end}
-        wf_exec['state'] = FutureState.get(self).value
         report = self._template.as_dict()
-        report['exec'] = wf_exec
+        report['exec'] = {
+            'id': self.uid,
+            'start': self._start,
+            'end': self._end,
+            'state': FutureState.get(self).value
+        }
         # Update task descriptions to add info about their execution.
-        tasks_list = report['tasks']
-        for task_dict in tasks_list:
+        for task_dict in report['tasks']:
             try:
-                task, exec_dict = self._tasks_by_id[task_dict['id']]
+                task = self._tasks_by_id[task_dict['id']]
             except KeyError:
-                task_dict.update({'exec': None})
+                task_dict['exec'] = None
                 continue
-            exec_dict['state'] = FutureState.get(task).value
-            exec_dict['initial_data'] = task._initial_data
-            if exec_dict['state'] == FutureState.finished.value:
-                exec_dict['final_data'] = task.result()
+            task_dict['exec'] = task.as_dict()
             # If the task is linked to a task holder, try to use its own report
             try:
                 task_report = task.holder.report()
@@ -763,8 +757,7 @@ class Workflow(asyncio.Future):
                 pass
             else:
                 if task_report is not None:
-                    exec_dict.update(task_report)
-            task_dict.update({'exec': exec_dict})
+                    task_dict['exec'].update(task_report)
         return report
 
 

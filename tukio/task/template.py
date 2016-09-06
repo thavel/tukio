@@ -34,7 +34,7 @@ class TaskTemplate:
         """
         task = new_task(self.name, data=data, config=self.config, loop=loop)
         task._template = self
-        task._initial_data = data.data if isinstance(data, Event) else data
+        task.initial_data = data.data if isinstance(data, Event) else data
         return task
 
     @classmethod
