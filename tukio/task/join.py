@@ -55,10 +55,12 @@ class JoinTask(TaskHolder):
         )
         # Trigger first step for this event
         self._step(event)
+        data = event.data
         try:
             await asyncio.wait_for(self._wait_for_tasks(), self._timeout)
         except asyncio.TimeoutError:
             log.warning("Join timed out, still waiting for %s", self._wait_for)
         else:
             log.debug('All awaited parents joined')
-        return self._data_stash
+        data['__data_stash__'] = self._data_stash
+        return data
