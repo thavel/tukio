@@ -60,7 +60,6 @@ class TestDAG(TestCase):
         self.assertIsNot(copy, dag)
         self.assertEqual(set(copy.root_nodes()), set(dag.root_nodes()))
         self.assertEqual(set(copy.leaves()), set(dag.leaves()))
-        self.assertEqual(copy.edges(), dag.edges())
 
     def test_add_node(self):
         dag = self.get_valid_dag()
