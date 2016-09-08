@@ -32,12 +32,12 @@ class JoinTask(TaskHolder):
         task_id = event.source.task_template_id
         # Check if wait for a number of tasks
         if isinstance(self._wait_for, int):
-            self._data_stash.append(event.data)
+            self._data_stash.append(event.data.copy())
             self._wait_for -= 1
             return self._wait_for == 0
         # Else, wait for list of ids
         elif isinstance(self._wait_for, list) and task_id in self._wait_for:
-            self._data_stash.append(event.data)
+            self._data_stash.append(event.data.copy())
             self._wait_for.remove(task_id)
             return len(self._wait_for) == 0
 
