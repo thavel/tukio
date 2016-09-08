@@ -44,10 +44,13 @@ class TukioTask(asyncio.Task):
 
     @inputs.setter
     def inputs(self, data):
-        if isinstance(data, Event):
-            self._inputs = deepcopy(data.data)
-        else:
-            self._inputs = deepcopy(data)
+        try:
+            if isinstance(data, Event):
+                self._inputs = deepcopy(data.data)
+            else:
+                self._inputs = deepcopy(data)
+        except TypeError:
+            self._inputs = {"error": "Cannot display task result"}
 
     @property
     def template(self):
@@ -98,10 +101,14 @@ class TukioTask(asyncio.Task):
         `TaskExecState.end` event.
         """
         super().set_result(result)
-        if isinstance(result, Event):
-            self._outputs = deepcopy(result.data)
-        else:
-            self._outputs = deepcopy(result)
+        try:
+            if isinstance(result, Event):
+                self._outputs = deepcopy(result.data)
+            else:
+                self._outputs = deepcopy(result)
+        except TypeError:
+            self._outputs = {"error": "Cannot display task result"}
+
         self._end = datetime.utcnow()
         data = {'type': TaskExecState.end.value, 'content': self._outputs}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
