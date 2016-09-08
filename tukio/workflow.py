@@ -634,7 +634,7 @@ class Workflow(asyncio.Future):
                 event = result
 
             for tmpl in next_tmpls:
-                next_task, _ = self._tasks_by_id.get(tmpl.uid, (None, {}))
+                next_task = self._tasks_by_id.get(tmpl.uid)
                 if next_task:
                     # Ignore done tasks
                     if next_task.done():

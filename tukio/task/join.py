@@ -1,4 +1,5 @@
 import asyncio
+from copy import copy
 import logging
 
 from .holder import TaskHolder
@@ -47,7 +48,7 @@ class JoinTask(TaskHolder):
                 return
 
     async def execute(self, event):
-        self._wait_for = list(self.config['wait_for'])
+        self._wait_for = copy(self.config['wait_for'])
         log.info(
             'Join task waiting for tasks (%s) (timeout: %s)',
             self._wait_for, self._timeout
