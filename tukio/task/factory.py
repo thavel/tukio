@@ -1,5 +1,5 @@
 import asyncio
-from copy import deepcopy
+from copy import copy
 from datetime import datetime
 import inspect
 from uuid import uuid4
@@ -44,13 +44,10 @@ class TukioTask(asyncio.Task):
 
     @inputs.setter
     def inputs(self, data):
-        try:
-            if isinstance(data, Event):
-                self._inputs = deepcopy(data.data)
-            else:
-                self._inputs = deepcopy(data)
-        except TypeError:
-            self._inputs = {"error": "Cannot display task result"}
+        if isinstance(data, Event):
+            self._inputs = copy(data.data)
+        else:
+            self._inputs = copy(data)
 
     @property
     def template(self):
@@ -101,13 +98,10 @@ class TukioTask(asyncio.Task):
         `TaskExecState.end` event.
         """
         super().set_result(result)
-        try:
-            if isinstance(result, Event):
-                self._outputs = deepcopy(result.data)
-            else:
-                self._outputs = deepcopy(result)
-        except TypeError:
-            self._outputs = {"error": "Cannot display task result"}
+        if isinstance(result, Event):
+            self._outputs = copy(result.data)
+        else:
+            self._outputs = copy(result)
 
         self._end = datetime.utcnow()
         data = {'type': TaskExecState.end.value, 'content': self._outputs}

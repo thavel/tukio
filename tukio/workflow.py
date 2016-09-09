@@ -1,4 +1,5 @@
 import asyncio
+from copy import copy
 from datetime import datetime
 from enum import Enum
 import functools
@@ -526,10 +527,7 @@ class Workflow(asyncio.Future):
         else:
             self._dispatch_exec_event(WorkflowExecState.begin, data)
             # Automatically wrap input data into an event object
-            if not isinstance(data, Event):
-                event = Event(data=data)
-            else:
-                event = data
+            event = Event(data=copy(data))
             task = self._new_task(root_tmpl, event)
             self._start = datetime.utcnow()
             # The workflow may fail to start at once
@@ -629,9 +627,14 @@ class Workflow(asyncio.Future):
                     task_template_id=task.template.uid,
                     task_exec_id=task.uid
                 )
-                event = Event(data=result, source=source)
+                event = Event(data=copy(result), source=source)
             else:
-                event = result
+                # Copy event data
+                event = Event(
+                    data=copy(event.data),
+                    topic=event.topic,
+                    source=event.source
+                )
 
             for tmpl in next_tmpls:
                 next_task = self._tasks_by_id.get(tmpl.uid)
