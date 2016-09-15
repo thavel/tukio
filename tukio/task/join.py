@@ -22,8 +22,10 @@ class JoinTask(TaskHolder):
         super().__init__(config)
         self._data_stash = []
         # Must be either a number of tasks or a list of ids
-        self._wait_for = None  # To be set later on to avoid modification
-        self._timeout = self.config.get('timeout')
+        # Copy because we alter the list/int during `_step`
+        self._wait_for = copy(self.config['wait_for'])
+        # Default timeout to avoid infinite wait
+        self._timeout = self.config.get('timeout', 60)
 
     def _step(self, event):
         """
@@ -48,7 +50,6 @@ class JoinTask(TaskHolder):
                 return
 
     async def execute(self, event):
-        self._wait_for = copy(self.config['wait_for'])
         log.info(
             'Join task waiting for tasks (%s) (timeout: %s)',
             self._wait_for, self._timeout
@@ -62,5 +63,7 @@ class JoinTask(TaskHolder):
             log.warning("Join timed out, still waiting for %s", self._wait_for)
         else:
             log.debug('All awaited parents joined')
+        # Data contains the outputs of the first task to join
+        # Variable `__data_stash__` contains a list of all parent tasks outputs
         data['__data_stash__'] = self._data_stash
         return data
