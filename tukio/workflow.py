@@ -617,26 +617,26 @@ class Workflow(asyncio.Future):
             log.warning('task %s ended on exception', task.template)
             log.exception(exc)
         else:
-            next_tmpls = self._get_next_task_templates(task.template, task)
+            source = EventSource(
+                workflow_template_id=self.template.uid,
+                workflow_exec_id=self.uid,
+                task_template_id=task.template.uid,
+                task_exec_id=task.uid
+            )
+            # Go through each child task
+            for tmpl in self._get_next_task_templates(task.template, task):
+                # TODO: An Event object could be a real object() with helpers
+                # Wrap result from parent task into an event object
+                if not isinstance(result, Event):
+                    event = Event(data=copy(result), source=source)
+                else:
+                    # If already an event, simply copy the event's data
+                    event = Event(
+                        data=copy(event.data),
+                        topic=event.topic,
+                        source=event.source
+                    )
 
-            # Wrap result from parent task into an event object
-            if not isinstance(result, Event):
-                source = EventSource(
-                    workflow_template_id=self.template.uid,
-                    workflow_exec_id=self.uid,
-                    task_template_id=task.template.uid,
-                    task_exec_id=task.uid
-                )
-                event = Event(data=copy(result), source=source)
-            else:
-                # Copy event data
-                event = Event(
-                    data=copy(event.data),
-                    topic=event.topic,
-                    source=event.source
-                )
-
-            for tmpl in next_tmpls:
                 next_task = self._tasks_by_id.get(tmpl.uid)
                 if next_task:
                     # Ignore done tasks
