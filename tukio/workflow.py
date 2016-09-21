@@ -525,14 +525,9 @@ class Workflow(asyncio.Future):
             self._try_mark_done()
             task = None
         else:
-            self._dispatch_exec_event(WorkflowExecState.begin, data)
             # Automatically wrap input data into an event object
-            if isinstance(data, Event):
-                # If run data is an event, copy it
-                event = copy(data)
-            else:
-                # Else create an event from it
-                event = Event(data=copy(data))
+            event = Event(data)
+            self._dispatch_exec_event(WorkflowExecState.begin, copy(event))
             task = self._new_task(root_tmpl, event)
             self._start = datetime.utcnow()
             # The workflow may fail to start at once
@@ -600,8 +595,13 @@ class Workflow(asyncio.Future):
         A shorthand to dispatch information about the workflow execution along
         the way.
         """
-        self._broker.dispatch({'type': etype.value, 'content': data},
-                              topic=EXEC_TOPIC, source=self._source)
+        if isinstance(data, Event):
+            data = data.data
+        self._broker.dispatch(
+            {'type': etype.value, 'content': data},
+            topic=EXEC_TOPIC,
+            source=self._source
+        )
 
     @_current_workflow
     def _run_next_tasks(self, task):
@@ -630,18 +630,8 @@ class Workflow(asyncio.Future):
             )
             # Go through each child task
             for tmpl in self._get_next_task_templates(task.template, task):
-                # TODO: An Event object could be a real object() with helpers
                 # Wrap result from parent task into an event object
-                if not isinstance(result, Event):
-                    event = Event(data=copy(result), source=source)
-                else:
-                    # If already an event, simply copy the event's data
-                    event = Event(
-                        data=copy(event.data),
-                        topic=event.topic,
-                        source=event.source
-                    )
-
+                event = Event(result, source=source)
                 next_task = self._tasks_by_id.get(tmpl.uid)
                 if next_task:
                     # Ignore done tasks

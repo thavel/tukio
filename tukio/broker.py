@@ -64,15 +64,6 @@ class Broker(object):
         """
         # Always call registered global handlers
         handlers = self._global_handlers
-
-        # Automatically wrap input data into an event object
-        if not isinstance(data, Event):
-            event = Event(data, topic=topic, source=source)
-        else:
-            event = data
-        # Use the topic from the event if the topic passed as argument is None
-        topic = topic or event.topic
-
         if topic is not None:
             try:
                 handlers = handlers | self._topic_handlers[topic]
@@ -81,6 +72,11 @@ class Broker(object):
 
         # Schedule the execution of all registered handlers
         for handler in handlers:
+            # Automatically wrap input data into an event object
+            if isinstance(data, Event):
+                event = Event(data, topic=data.topic, source=data.source)
+            else:
+                event = Event(data, topic, source)
             if asyncio.iscoroutinefunction(handler):
                 asyncio.ensure_future(handler(event), loop=self._loop)
             else:

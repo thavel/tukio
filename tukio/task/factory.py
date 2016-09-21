@@ -5,7 +5,7 @@ import inspect
 from uuid import uuid4
 
 from tukio.broker import get_broker, EXEC_TOPIC
-from tukio.event import EventSource, Event
+from tukio.event import EventSource
 from tukio.utils import FutureState
 
 from .task import TaskRegistry, TaskExecState
@@ -44,10 +44,8 @@ class TukioTask(asyncio.Task):
 
     @inputs.setter
     def inputs(self, data):
-        if isinstance(data, Event):
-            self._inputs = copy(data.data)
-        else:
-            self._inputs = copy(data)
+        # Freeze input data (dict or event)
+        self._inputs = copy(data)
 
     @property
     def template(self):
@@ -98,11 +96,8 @@ class TukioTask(asyncio.Task):
         `TaskExecState.end` event.
         """
         super().set_result(result)
-        if isinstance(result, Event):
-            self._outputs = copy(result.data)
-        else:
-            self._outputs = copy(result)
-
+        # Freeze output data (dict or event)
+        self._outputs = copy(result)
         self._end = datetime.utcnow()
         data = {'type': TaskExecState.end.value, 'content': self._outputs}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
