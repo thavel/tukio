@@ -527,7 +527,12 @@ class Workflow(asyncio.Future):
         else:
             self._dispatch_exec_event(WorkflowExecState.begin, data)
             # Automatically wrap input data into an event object
-            event = Event(data=copy(data))
+            if isinstance(data, Event):
+                # If run data is an event, copy it
+                event = copy(data)
+            else:
+                # Else create an event from it
+                event = Event(data=copy(data))
             task = self._new_task(root_tmpl, event)
             self._start = datetime.utcnow()
             # The workflow may fail to start at once
