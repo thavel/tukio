@@ -509,7 +509,7 @@ class Workflow(asyncio.Future):
             self._cancel_all_tasks()
 
     @_current_workflow
-    def run(self, data):
+    def run(self, event):
         """
         Execute the workflow following the description passed at init.
         """
@@ -526,7 +526,6 @@ class Workflow(asyncio.Future):
             task = None
         else:
             # Automatically wrap input data into an event object
-            event = Event(data)
             self._dispatch_exec_event(WorkflowExecState.begin, copy(event))
             task = self._new_task(root_tmpl, event)
             self._start = datetime.utcnow()

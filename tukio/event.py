@@ -72,8 +72,8 @@ class Event:
         return self._source
 
     def __str__(self):
-        return '<Event data={}, topic={}, source={}>'.format(
-            self._data, self._topic, self._source
+        return '<Event topic={}, data={}, source={}>'.format(
+            self._topic, self._data, self._source
         )
 
     def __repr__(self):

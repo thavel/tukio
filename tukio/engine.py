@@ -235,8 +235,9 @@ class Engine(asyncio.Future):
         and may trigger new workflow executions.
         """
         log.debug("data received: %s (topic=%s)", data, topic)
+        event = Event(data, topic=topic)
         # Disptatch data to 'listening' tasks at all cases
-        self._broker.dispatch(data, topic)
+        self._broker.dispatch(event, topic)
         # Don't start new workflow instances if `stop()` was called.
         if self._must_stop:
             log.debug("The engine is stopping, cannot trigger new workflows")
@@ -247,7 +248,6 @@ class Engine(asyncio.Future):
             # templates at all times!
             wflows = []
             for tmpl in templates:
-                event = Event(data, topic=topic)
                 wflow = self._try_run(tmpl, event)
                 if wflow:
                     wflows.append(wflow)
@@ -266,18 +266,18 @@ class Engine(asyncio.Future):
             except KeyError:
                 log.error('workflow template %s not loaded', template_id)
                 return None
-            return self._try_run(template, data)
+            return self._try_run(template, Event(data))
 
-    def _do_run(self, wflow, data):
+    def _do_run(self, wflow, event):
         """
         A workflow instance must be in the list of running instances until
         it completes.
         """
         self._add_wflow(wflow)
         wflow.add_done_callback(self._remove_wflow)
-        wflow.run(data)
+        wflow.run(event)
 
-    def _try_run(self, template, data):
+    def _try_run(self, template, event):
         """
         Try to run a new instance of workflow according to the instances
         already running and the overrun policy.
@@ -294,10 +294,10 @@ class Engine(asyncio.Future):
         if wflow:
             if template.policy == OverrunPolicy.abort_running and running:
                 def cb():
-                    self._do_run(wflow, data)
+                    self._do_run(wflow, event)
                 asyncio.ensure_future(self._wait_abort(running, cb))
             else:
-                self._do_run(wflow, data)
+                self._do_run(wflow, event)
         else:
             log.debug("skip new workflow from %s (overrun policy)", template)
         return wflow
@@ -328,5 +328,5 @@ class Engine(asyncio.Future):
             return None
         with await self._lock:
             wflow = Workflow(template, loop=self._loop)
-            self._do_run(wflow, data)
+            self._do_run(wflow, Event(data))
         return wflow
