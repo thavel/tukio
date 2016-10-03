@@ -95,23 +95,3 @@ def new_task(task_name, *, data=None, config=None, loop=None):
     else:
         coro = coro_fn(data)
     return asyncio.ensure_future(coro, loop=loop)
-
-
-class TaskExecState(Enum):
-
-    begin = 'task-begin'
-    end = 'task-end'
-    error = 'task-error'
-    progress = 'task-progress'
-
-
-def dispatch_progress(data, broker=None):
-    """
-    A shorthand to dispatch task progress events in the 'EXEC_TOPIC' from any
-    tukio task.
-    """
-    broker = broker or get_broker()
-    task = asyncio.Task.current_task()
-    event_data = {'type': TaskExecState.progress.value}
-    event_data['content'] = data
-    broker.dispatch(event_data, topic=EXEC_TOPIC, source=task.event_source)

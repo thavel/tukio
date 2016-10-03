@@ -1,6 +1,7 @@
 import asyncio
 from copy import copy
 from datetime import datetime
+from enum import Enum
 import inspect
 from uuid import uuid4
 
@@ -8,7 +9,15 @@ from tukio.broker import get_broker, EXEC_TOPIC
 from tukio.event import EventSource
 from tukio.utils import FutureState
 
-from .task import TaskRegistry, TaskExecState
+from .task import TaskRegistry
+
+
+class TaskExecState(Enum):
+
+    begin = 'task-begin'
+    end = 'task-end'
+    error = 'task-error'
+    progress = 'task-progress'
 
 
 class TukioTask(asyncio.Task):
@@ -111,6 +120,15 @@ class TukioTask(asyncio.Task):
         self._end = datetime.utcnow()
         data = {'type': TaskExecState.error.value, 'content': exception}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
+
+    def dispatch_progress(self, data):
+        """
+        Dispatch task progress events in the 'EXEC_TOPIC' from
+        this tukio task.
+        """
+        event_data = {'type': TaskExecState.progress.value}
+        event_data['content'] = data
+        self._broker.dispatch(event_data, topic=EXEC_TOPIC, source=self._source)
 
     def _step(self, exc=None):
         """

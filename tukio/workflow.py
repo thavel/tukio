@@ -749,12 +749,9 @@ class Workflow(asyncio.Future):
             task_dict['exec'] = task.as_dict()
             # If the task is linked to a task holder, try to use its own report
             try:
-                task_report = task.holder.report()
+                task_dict['exec']['reporting'] = task.holder.report()
             except AttributeError:
                 pass
-            else:
-                if task_report is not None:
-                    task_dict['exec'].update(task_report)
         return report
 
 
