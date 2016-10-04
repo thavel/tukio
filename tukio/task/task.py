@@ -10,7 +10,6 @@ execution of Tukio tasks in an asyncio event loop.
 import asyncio
 import logging
 import inspect
-from enum import Enum
 
 from tukio.broker import get_broker, EXEC_TOPIC
 
