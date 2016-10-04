@@ -31,7 +31,7 @@ class JoinTask(TaskHolder):
         """
         Take a new event and consume it with the `wait_for` configuration.
         """
-        task_id = event.source.task_template_id
+        task_id = event.source._task_template_id
         # Check if wait for a number of tasks
         if isinstance(self._wait_for, int):
             self._data_stash.append(event.data.copy())
