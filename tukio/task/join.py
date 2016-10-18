@@ -1,5 +1,6 @@
 import asyncio
 from copy import copy
+from datetime import datetime
 import logging
 
 from .holder import TaskHolder
@@ -27,11 +28,25 @@ class JoinTask(TaskHolder):
         # Default timeout to avoid infinite wait
         self._timeout = self.config.get('timeout', 60)
 
+        # Reporting variables
+        self._status = 'running'
+        self._task = None  # Will be set on task execution
+        self._tasks_report = []
+
+    def report(self):
+        return {'tasks': self._tasks_report, 'status': self._status}
+
+    def add_task_report(self, task_id):
+        task_report = {'id': task_id, 'time': datetime.utcnow().isoformat()}
+        self._task.dispatch_progress(task_report)
+        self._tasks_report.append(task_report)
+
     def _step(self, event):
         """
         Take a new event and consume it with the `wait_for` configuration.
         """
         task_id = event.source._task_template_id
+        self.add_task_report(task_id)
         # Check if wait for a number of tasks
         if isinstance(self._wait_for, int):
             self._data_stash.append(event.data.copy())
@@ -54,6 +69,7 @@ class JoinTask(TaskHolder):
             'Join task waiting for tasks (%s) (timeout: %s)',
             self._wait_for, self._timeout
         )
+        self._task = asyncio.Task.current_task()
         # Trigger first step for this event
         self._step(event)
         data = event.data
@@ -61,8 +77,12 @@ class JoinTask(TaskHolder):
             await asyncio.wait_for(self._wait_for_tasks(), self._timeout)
         except asyncio.TimeoutError:
             log.warning("Join timed out, still waiting for %s", self._wait_for)
+            self._status = 'timeout'
+            self._task.dispatch_progress({'status': 'timeout'})
         else:
             log.debug('All awaited parents joined')
+            self._status = 'done'
+            self._task.dispatch_progress({'status': 'done'})
         # Data contains the outputs of the first task to join
         # Variable `__data_stash__` contains a list of all parent tasks outputs
         data['__data_stash__'] = self._data_stash
