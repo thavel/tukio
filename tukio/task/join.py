@@ -28,18 +28,16 @@ class JoinTask(TaskHolder):
         # Default timeout to avoid infinite wait
         self._timeout = self.config.get('timeout', 60)
 
-        # Reporting variables
-        self._status = 'running'
-        self._task = None  # Will be set on task execution
-        self._tasks_report = []
+        # Reporting
+        self._report = {'tasks': [], 'status': 'running'}
 
     def report(self):
-        return {'tasks': self._tasks_report, 'status': self._status}
+        return self._report
 
     def add_task_report(self, task_id):
-        task_report = {'id': task_id, 'time': datetime.utcnow().isoformat()}
-        self._task.dispatch_progress(task_report)
-        self._tasks_report.append(task_report)
+        task_report = {'id': task_id, 'end_time': datetime.utcnow().isoformat()}
+        self._report['tasks'].append(task_report)
+        self._task.dispatch_progress(self._report)
 
     def _step(self, event):
         """
@@ -77,12 +75,12 @@ class JoinTask(TaskHolder):
             await asyncio.wait_for(self._wait_for_tasks(), self._timeout)
         except asyncio.TimeoutError:
             log.warning("Join timed out, still waiting for %s", self._wait_for)
-            self._status = 'timeout'
-            self._task.dispatch_progress({'status': 'timeout'})
+            self._report['status'] = 'timeout'
+            self._task.dispatch_progress(self._report)
         else:
             log.debug('All awaited parents joined')
-            self._status = 'done'
-            self._task.dispatch_progress({'status': 'done'})
+            self._report['status'] = 'done'
+            self._task.dispatch_progress(self._report)
         # Data contains the outputs of the first task to join
         # Variable `__data_stash__` contains a list of all parent tasks outputs
         data['__data_stash__'] = self._data_stash
