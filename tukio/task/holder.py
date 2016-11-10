@@ -57,3 +57,10 @@ class TaskHolder:
         by the workflow execution engine to build the dict that represents an
         execution of a task.
         """
+
+    async def teardown(self):
+        """
+        This method will be async called right after a Tukio task cancellation,
+        and it is intended to perform any ultimate actions (like cleanups)
+        before loosing the task reference.
+        """

@@ -692,6 +692,10 @@ class Workflow(asyncio.Future):
             is_cancelled = task.cancel()
             if is_cancelled:
                 cancelled += 1
+                try:
+                    asyncio.ensure_future(task.holder.teardown())
+                except AttributeError:
+                    pass
         return cancelled
 
     def set_next_tasks(self, task_tmpl_ids):
