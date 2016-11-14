@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from tukio.dag import DAG
 from tukio.task import TaskTemplate, TaskRegistry, UnknownTaskName, TukioTask
-from tukio.utils import FutureState, Listen
+from tukio.utils import FutureState, Listen, SkipTask
 from tukio.broker import get_broker, EXEC_TOPIC
 from tukio.event import Event, EventSource
 
@@ -617,34 +617,41 @@ class Workflow(asyncio.Future):
         # branches of the workflow.
         try:
             result = task.result()
+        except SkipTask:
+            # If the task has been skipped, we just forward the previous task
+            # inputs to the next one.
+            result = task.inputs
+            log.warning('task %s has been skipped', task.template)
         except Exception as exc:
             log.warning('task %s ended on exception', task.template)
             log.exception(exc)
-        else:
-            source = EventSource(
-                workflow_template_id=self.template.uid,
-                workflow_exec_id=self.uid,
-                task_template_id=task.template.uid,
-                task_exec_id=task.uid
-            )
-            # Go through each child task
-            for tmpl in self._get_next_task_templates(task.template, task):
-                # Wrap result from parent task into an event object
-                event = Event(result, source=source)
-                next_task = self._tasks_by_id.get(tmpl.uid)
-                if next_task:
-                    # Ignore done tasks
-                    if next_task.done():
-                        continue
-                    # Downstream task already running, join it!
-                    self._join_task(next_task, event)
-                # Create new task
-                else:
-                    next_task = self._new_task(tmpl, event)
-                if not next_task:
-                    break
-        finally:
             self._try_mark_done()
+            return
+
+        source = EventSource(
+            workflow_template_id=self.template.uid,
+            workflow_exec_id=self.uid,
+            task_template_id=task.template.uid,
+            task_exec_id=task.uid
+        )
+        # Go through each child task
+        for tmpl in self._get_next_task_templates(task.template, task):
+            # Wrap result from parent task into an event object
+            event = Event(result, source=source)
+            next_task = self._tasks_by_id.get(tmpl.uid)
+            if next_task:
+                # Ignore done tasks
+                if next_task.done():
+                    continue
+                # Downstream task already running, join it!
+                self._join_task(next_task, event)
+            # Create new task
+            else:
+                next_task = self._new_task(tmpl, event)
+            if not next_task:
+                break
+
+        self._try_mark_done()
 
     def _try_mark_done(self):
         """

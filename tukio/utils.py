@@ -1,6 +1,10 @@
 from enum import Enum
 
 
+class SkipTask(Exception):
+    pass
+
+
 class FutureState(Enum):
 
     """
@@ -9,6 +13,7 @@ class FutureState(Enum):
         'cancelled': means the future is done but was cancelled
         'exception': means the future is done but raised an exception
         'finished': means the future is done and completed as expected
+        'skipped': means the future is done but the job has been skipped
     Enum values are used in workflows/tasks's execution reports.
     """
 
@@ -16,6 +21,7 @@ class FutureState(Enum):
     cancelled = 'cancelled'
     exception = 'exception'
     finished = 'finished'
+    skipped = 'skipped'
 
     @classmethod
     def get(cls, future):
@@ -27,6 +33,8 @@ class FutureState(Enum):
         if future.cancelled():
             return cls.cancelled
         if future._exception:
+            if isinstance(future._exception, SkipTask):
+                return cls.skipped
             return cls.exception
         return cls.finished
 

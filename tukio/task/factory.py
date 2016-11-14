@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from tukio.broker import get_broker, EXEC_TOPIC
 from tukio.event import EventSource
-from tukio.utils import FutureState
+from tukio.utils import FutureState, SkipTask
 
 from .task import TaskRegistry
 
@@ -17,6 +17,7 @@ class TaskExecState(Enum):
     begin = 'task-begin'
     end = 'task-end'
     error = 'task-error'
+    skip = 'task-skip'
     progress = 'task-progress'
 
 
@@ -118,7 +119,9 @@ class TukioTask(asyncio.Task):
         """
         super().set_exception(exception)
         self._end = datetime.utcnow()
-        data = {'type': TaskExecState.error.value, 'content': exception}
+        etype = 'skip' if isinstance(exception, SkipTask) else 'error'
+        content = None if isinstance(exception, SkipTask) else exception
+        data = {'type': TaskExecState[etype].value, 'content': content}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
 
     def dispatch_progress(self, data):
