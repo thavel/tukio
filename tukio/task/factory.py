@@ -119,9 +119,11 @@ class TukioTask(asyncio.Task):
         """
         super().set_exception(exception)
         self._end = datetime.utcnow()
-        etype = 'skip' if isinstance(exception, SkipTask) else 'error'
-        content = None if isinstance(exception, SkipTask) else exception
-        data = {'type': TaskExecState[etype].value, 'content': content}
+
+        etype = TaskExecState.error
+        if isinstance(exception, SkipTask):
+            etype = TaskExecState.skip
+        data = {'type': etype.value, 'content': exception}
         self._broker.dispatch(data=data, topic=EXEC_TOPIC, source=self._source)
 
     def dispatch_progress(self, data):

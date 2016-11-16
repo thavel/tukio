@@ -4,6 +4,9 @@ from enum import Enum
 class SkipTask(Exception):
     pass
 
+    def __init__(self, reason=None):
+        self.reason = reason
+
 
 class FutureState(Enum):
 
