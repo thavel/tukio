@@ -26,7 +26,7 @@ class JoinTask(TaskHolder):
         # Copy because we alter the list/int during `_step`
         self._wait_for = copy(self.config['wait_for'])
         # Default timeout to avoid infinite wait
-        self._timeout = self.config.get('timeout', 60)
+        self._timeout = self.config.get('timeout')
 
         # Reporting
         self._report = {'tasks': [], 'status': 'running'}
@@ -82,6 +82,6 @@ class JoinTask(TaskHolder):
             self._report['status'] = 'done'
             self._task.dispatch_progress(self._report)
         # Data contains the outputs of the first task to join
-        # Variable `__data_stash__` contains a list of all parent tasks outputs
-        data['__data_stash__'] = self._data_stash
+        # Variable `data_stash` contains a list of all parent tasks outputs
+        data['data_stash'] = self._data_stash
         return data
