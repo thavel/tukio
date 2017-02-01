@@ -25,6 +25,7 @@ class FutureState(Enum):
     exception = 'exception'
     finished = 'finished'
     skipped = 'skipped'
+    suspended = 'suspended'
 
     @classmethod
     def get(cls, future):
@@ -32,6 +33,8 @@ class FutureState(Enum):
         Returns the state of a future as `FutureState` member
         """
         if not future.done():
+            if hasattr(future, '_resumed') and not future._resumed.is_set():
+                return cls.suspended
             return cls.pending
         if future.cancelled():
             return cls.cancelled

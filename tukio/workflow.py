@@ -1,10 +1,10 @@
 import asyncio
-from copy import copy
-from datetime import datetime
-from enum import Enum
 import functools
 import inspect
 import logging
+from copy import copy
+from datetime import datetime
+from enum import Enum
 from uuid import uuid4
 
 from tukio.dag import DAG
@@ -47,6 +47,8 @@ class WorkflowExecState(Enum):
     end = 'workflow-end'
     error = 'workflow-error'
     progress = 'workflow-progress'
+    suspend = 'workflow-suspend'
+    resume = 'workflow-resume'
 
 
 class OverrunPolicy(Enum):
@@ -340,7 +342,7 @@ def _current_workflow(func):
     def wrapper(self, *args, **kwargs):
         self.__class__._current_workflows[self._loop] = self
         try:
-            func(self, *args, **kwargs)
+            return func(self, *args, **kwargs)
         finally:
             self.__class__._current_workflows.pop(self._loop)
     return wrapper
@@ -433,6 +435,9 @@ class Workflow(asyncio.Future):
             workflow_template_id=self._template.uid,
             workflow_exec_id=self.uid
         )
+        # Suspend/resume mechanism
+        self._resumed = asyncio.Event()
+        self._resumed.set()
 
     @property
     def template(self):
@@ -552,7 +557,11 @@ class Workflow(asyncio.Future):
             return None
         task._workflow = self
         log.debug('new task created for %s', task_tmpl)
-        task.add_done_callback(self._run_next_tasks)
+
+        def next_tasks(future):
+            asyncio.ensure_future(self._run_next_tasks(future), loop=self._loop)
+
+        task.add_done_callback(next_tasks)
         self.tasks.add(task)
         # Create the exec dict of the task
         self._tasks_by_id[task_tmpl.uid] = task
@@ -603,15 +612,24 @@ class Workflow(asyncio.Future):
         )
 
     @_current_workflow
-    def _run_next_tasks(self, task):
+    async def _run_next_tasks(self, task):
         """
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
         """
+        # Ensure the workflow is not suspended, else wait for a resume.
+        try:
+            await self._resumed.wait()
+        except asyncio.CancelledError:
+            # If cancelled, the workflow will return with the statement below.
+            log.debug('Suspended workflow cancelled')
+            pass
+
         self._done_tasks.add(task)
         if self._must_cancel:
             self._try_mark_done()
             return
+
         # Don't execute downstream tasks if the task's result is an exception
         # (may include task cancellation) but don't stop executing the other
         # branches of the workflow.
@@ -719,12 +737,49 @@ class Workflow(asyncio.Future):
             raise RuntimeError('task {} not executed by {}'.format(task, self))
         self._updated_next_tasks[task] = task_tmpl_ids
 
+    def suspend(self):
+        """
+        Suspend the execution of this workflow, blocking any new task from
+        starting.
+        This could be enhanced by calling a `suspend()` method inside currently
+        running tasks.
+        """
+        if not self._resumed.is_set():
+            return
+        self._resumed.clear()
+        self._dispatch_exec_event(WorkflowExecState.suspend)
+
+        # for task in (self.tasks - self._done_tasks):
+        #     try:
+        #         asyncio.ensure_future(task.holder.suspend())
+        #     except AttributeError:
+        #         pass
+
+    def resume(self):
+        """
+        Resume the execution of this workflow, unblocking new tasks from
+        starting.
+        This could be enhanced by calling a `resume()` method inside suspended
+        tasks.
+        """
+        if self._resumed.is_set():
+            return
+        self._resumed.set()
+        self._dispatch_exec_event(WorkflowExecState.resume)
+
+        # for task in (self.tasks - self._done_tasks):
+        #     try:
+        #         asyncio.ensure_future(task.holder.resume())
+        #     except AttributeError:
+        #         pass
+
     def cancel(self):
         """
         Cancel the workflow by cancelling all pending tasks (aka all tasks not
         marked as done). We must wait for all tasks to be actually done before
         marking the workflow as cancelled (hence done).
         """
+        self.resume()
         cancelled = self._cancel_all_tasks()
         if cancelled == 0:
             super().cancel()
