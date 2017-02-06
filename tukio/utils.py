@@ -45,6 +45,9 @@ class FutureState(Enum):
             return cls.exception
         return cls.finished
 
+    def done(self):
+        return self in (self.finished, self.skipped, self.exception)
+
 
 class Listen(Enum):
 

@@ -3,6 +3,7 @@ Tukio Workflow Engine
 """
 import asyncio
 import logging
+from copy import copy
 
 from tukio.workflow import OverrunPolicy, new_workflow, Workflow
 from tukio.broker import get_broker
@@ -329,4 +330,18 @@ class Engine(asyncio.Future):
         with await self._lock:
             wflow = Workflow(template, loop=self._loop)
             self._do_run(wflow, Event(data))
+        return wflow
+
+    async def rescue(self, template, report):
+        """
+        Starts a dangling workflow instance using its last known report.
+        """
+        if self._must_stop:
+            log.debug("The engine is stopping, cannot rescue the workflow from"
+                      "its report (execution id %s)", report['exec']['id'])
+            return None
+
+        with await self._lock:
+            wflow = Workflow(template, loop=self._loop)
+            wflow.fast_forward(report)
         return wflow

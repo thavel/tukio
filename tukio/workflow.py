@@ -824,6 +824,47 @@ class Workflow(asyncio.Future):
                 pass
         return report
 
+    def fast_forward(self, report):
+        """
+        Restore a workflow and its tasks states, parsing an execution report.
+        """
+        self.uid = report['exec']['id']
+        self._start = report['exec']['start']
+        self._end = report['exec'].get('end')
+
+        if report['exec']['state'] == FutureState.suspended.value:
+            self._resumed.clear()
+
+        # Find the tasks that need to be executed
+        resume = set()
+        def browse(entry):
+            report_task = report['tasks'][entry.uid]
+            state = FutureState(report_task['exec']['state'])
+
+            # Manually creates an tukio Task (but won't run it)
+            klass, coro_fn = TaskRegistry.get(entry.name)
+            async_task = TukioTask(coro_fn)
+            if klass:
+                task_holder = klass(entry.config)
+                task_holder.report = lambda: report_task['exec']['reporting']
+                async_task.holder = task_holder
+
+            # Add this task to the tracking sets
+            self.tasks.add(async_task)
+            self._tasks_by_id[entry.uid] = async_task
+
+            if not state.done():
+                resume.add(async_task)
+                return
+
+            for next_task in self._template.dag.successors(entry):
+                browse(next_task)
+        browse(self._template.root())
+
+        for task in resume:
+            # TODO: start the task
+            pass
+
 
 def new_workflow(wf_tmpl, running=None, loop=None):
     """
