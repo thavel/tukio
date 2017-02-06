@@ -44,6 +44,8 @@ class TukioTask(asyncio.Task):
         self._end = None
         self._inputs = None
         self._outputs = None
+        self._resumed = asyncio.Event()
+        self._resumed.set()
         self._queue = asyncio.Queue(loop=self._loop)
         if self.holder:
             self.holder.queue = self._queue
@@ -72,6 +74,10 @@ class TukioTask(asyncio.Task):
     @property
     def queue(self):
         return self._queue
+
+    def suspend(self):
+        self.cancel()
+        self._resumed.clear()
 
     def as_dict(self):
         """

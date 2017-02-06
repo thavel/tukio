@@ -559,7 +559,7 @@ class Workflow(asyncio.Future):
         log.debug('new task created for %s', task_tmpl)
 
         def next_tasks(future):
-            asyncio.ensure_future(self._run_next_tasks(future), loop=self._loop)
+            asyncio.ensure_future(self._run_next_tasks(future))
 
         task.add_done_callback(next_tasks)
         self.tasks.add(task)
@@ -617,14 +617,6 @@ class Workflow(asyncio.Future):
         A callback to be added to each task in order to select and schedule
         asynchronously downstream tasks once the parent task is done.
         """
-        # Ensure the workflow is not suspended, else wait for a resume.
-        try:
-            await self._resumed.wait()
-        except asyncio.CancelledError:
-            # If cancelled, the workflow will return with the statement below.
-            log.debug('Suspended workflow cancelled')
-            pass
-
         self._done_tasks.add(task)
         if self._must_cancel:
             self._try_mark_done()
@@ -640,10 +632,21 @@ class Workflow(asyncio.Future):
             # inputs to the next one.
             result = task.inputs
             log.warning('task %s has been skipped', task.template)
+        except asyncio.CancelledError:
+            log.warning('task %s has been cancelled', task.template)
+            return
         except Exception as exc:
             log.warning('task %s ended on exception', task.template)
             log.exception(exc)
             self._try_mark_done()
+            return
+
+        # Ensure the workflow is not suspended, else wait for a resume.
+        try:
+            await self._resumed.wait()
+        except asyncio.CancelledError:
+            # If cancelled, the workflow will return with the statement below.
+            log.debug('Suspended workflow cancelled')
             return
 
         source = EventSource(
@@ -677,6 +680,9 @@ class Workflow(asyncio.Future):
         result is set to either the exec graph (represented by a dict) or to an
         exception raised at task creation.
         """
+        if not self._resumed.is_set():
+            return
+
         # Note: the result of the workflow may already have been set by another
         # done callback from another task executed in the same iteration of the
         # event loop.
@@ -739,39 +745,38 @@ class Workflow(asyncio.Future):
 
     def suspend(self):
         """
-        Suspend the execution of this workflow, blocking any new task from
+        Suspend the execution of this workflow prevents any new task from
         starting.
-        This could be enhanced by calling a `suspend()` method inside currently
-        running tasks.
         """
         if not self._resumed.is_set():
             return
         self._resumed.clear()
-        self._dispatch_exec_event(WorkflowExecState.suspend)
 
-        # for task in (self.tasks - self._done_tasks):
-        #     try:
-        #         asyncio.ensure_future(task.holder.suspend())
-        #     except AttributeError:
-        #         pass
+        # Suspend a task means the task will be cancelled with the state
+        # 'suspended', which can be used later to resume the workflow
+        for task in (self.tasks - self._done_tasks):
+            task.suspend()
+
+        self._dispatch_exec_event(WorkflowExecState.suspend)
 
     def resume(self):
         """
-        Resume the execution of this workflow, unblocking new tasks from
-        starting.
-        This could be enhanced by calling a `resume()` method inside suspended
-        tasks.
+        Resume the execution of this workflow allows new tasks to start.
         """
         if self._resumed.is_set():
+            log.error("Can't resume a workflow that hasn't been suspended")
             return
         self._resumed.set()
-        self._dispatch_exec_event(WorkflowExecState.resume)
 
-        # for task in (self.tasks - self._done_tasks):
-        #     try:
-        #         asyncio.ensure_future(task.holder.resume())
-        #     except AttributeError:
-        #         pass
+        # Next tasks are done waiting for '_resumed' asyncio event
+        # The 'suspended' ones needs to be re-executed
+        for task in self._done_tasks:
+            if FutureState.get(task) is not FutureState.suspended:
+                continue
+            event = Event(task.inputs, source=task.event_source)
+            self._new_task(task.template, event)
+
+        self._dispatch_exec_event(WorkflowExecState.resume)
 
     def cancel(self):
         """
@@ -779,7 +784,6 @@ class Workflow(asyncio.Future):
         marked as done). We must wait for all tasks to be actually done before
         marking the workflow as cancelled (hence done).
         """
-        self.resume()
         cancelled = self._cancel_all_tasks()
         if cancelled == 0:
             super().cancel()
