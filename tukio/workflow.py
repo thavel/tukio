@@ -41,6 +41,20 @@ class TemplateGraphError(WorkflowError):
         return 'graph error on task id: {}'.format(self._key)
 
 
+class RescueError(WorkflowError):
+
+    def __init__(self, uid, reason):
+        super().__init__()
+        self._uid = uid
+        self._reason = reason
+
+    def __str__(self):
+        return (
+            'cannot rescue workflow id {} from its last execution report. '
+            'reason: {}'.format(self._uid, self._reason)
+        )
+
+
 class WorkflowExecState(Enum):
 
     begin = 'workflow-begin'
@@ -831,39 +845,65 @@ class Workflow(asyncio.Future):
         self.uid = report['exec']['id']
         self._start = report['exec']['start']
         self._end = report['exec'].get('end')
+        log.info('fast forward workflow id %s', self.uid)
 
-        if report['exec']['state'] == FutureState.suspended.value:
-            self._resumed.clear()
-
-        # Find the tasks that need to be executed
+        # Build a list of task in the graph that need to be executed
         resume = set()
-        def browse(entry):
-            report_task = report['tasks'][entry.uid]
-            state = FutureState(report_task['exec']['state'])
 
-            # Manually creates an tukio Task (but won't run it)
-            klass, coro_fn = TaskRegistry.get(entry.name)
-            async_task = TukioTask(coro_fn)
-            if klass:
-                task_holder = klass(entry.config)
-                task_holder.report = lambda: report_task['exec']['reporting']
-                async_task.holder = task_holder
-
-            # Add this task to the tracking sets
-            self.tasks.add(async_task)
-            self._tasks_by_id[entry.uid] = async_task
-
-            if not state.done():
-                resume.add(async_task)
+        def browse(entry, parent=None):
+            """
+            Dive into the dag to:
+                - ensure executed task contexts are restored.
+                - find tasks that need to be executed.
+            """
+            ttemplate = copy(next(
+                t for t in report['tasks'] if t['uid'] == entry.uid
+            ))
+            treport = ttemplate.get('exec')
+            if not treport:
+                if not parent:
+                    raise RescueError(self.uid, 'root task never been started')
+                # No execution report found, the task needs to be executed
+                resume.add((entry.template, None, parent))
                 return
 
-            for next_task in self._template.dag.successors(entry):
-                browse(next_task)
+            tstate = FutureState(treport['state'])
+            if not tstate.done():
+                # Pending, suspended or cancelled tasks need to be executed
+                resume.add((entry.template, ttemplate, parent))
+                return
+
+            if tstate.done():
+                tshadow = type('ShadowTukioTask', (object,), {
+                    'shadow': True,
+                    'as_dict': lambda: treport
+                })
+
+                # Add this task to the tracking sets
+                self.tasks.add(tshadow)
+                self._done_tasks.add(tshadow)
+                self._tasks_by_id[entry.uid] = tshadow
+
+                # Recursive browing
+                for tnext in self._template.dag.successors(entry):
+                    browse(tnext, ttemplate)
         browse(self._template.root())
 
-        for task in resume:
-            # TODO: start the task
-            pass
+        # Resume/start tasks that need to be executed
+        for task_template, task_report, parent_report in resume:
+            if parent_report:
+                inputs = parent_report['exec']['ouputs']
+                source = EventSource(
+                    workflow_template_id=self.template.uid,
+                    workflow_exec_id=self.uid,
+                    task_template_id=parent_report['uid'],
+                    task_exec_id=parent_report['exec']['uid']
+                )
+                event = Event(inputs, source=source)
+            else:
+                # No parent report = root task
+                event = Event(task_report['exec']['inputs'])
+            self._new_task(task_template, event)
 
 
 def new_workflow(wf_tmpl, running=None, loop=None):

@@ -18,6 +18,7 @@ class FutureState(Enum):
         'exception': means the future is done but raised an exception
         'finished': means the future is done and completed as expected
         'skipped': means the future is done but the job has been skipped
+        'suspended': means the future is done but the job has been suspended
     Enum values are used in workflows/tasks's execution reports.
     """
 
