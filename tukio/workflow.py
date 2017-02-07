@@ -652,6 +652,7 @@ class Workflow(asyncio.Future):
             log.warning('task %s has been skipped', task.template)
         except asyncio.CancelledError:
             log.warning('task %s has been cancelled', task.template)
+            self._try_mark_done()
             return
         except Exception as exc:
             log.warning('task %s ended on exception', task.template)
@@ -699,6 +700,7 @@ class Workflow(asyncio.Future):
         exception raised at task creation.
         """
         if not self._committed.is_set():
+            # Won't mark a workflow 'done' if it's suspended
             return
 
         # Note: the result of the workflow may already have been set by another
@@ -776,6 +778,7 @@ class Workflow(asyncio.Future):
             task.suspend()
 
         self._dispatch_exec_event(WorkflowExecState.suspend)
+        log.info('workflow %s has been suspended', self)
 
     def resume(self):
         """
@@ -795,6 +798,7 @@ class Workflow(asyncio.Future):
             self._new_task(task.template, event)
 
         self._dispatch_exec_event(WorkflowExecState.resume)
+        log.info('workflow %s has been resumed', self)
 
     def cancel(self):
         """
@@ -802,6 +806,10 @@ class Workflow(asyncio.Future):
         marked as done). We must wait for all tasks to be actually done before
         marking the workflow as cancelled (hence done).
         """
+        if not self._committed.is_set():
+            self._committed.set()
+            self._try_mark_done()
+
         cancelled = self._cancel_all_tasks()
         if cancelled == 0:
             super().cancel()
@@ -853,7 +861,7 @@ class Workflow(asyncio.Future):
             workflow_template_id=self._template.uid,
             workflow_exec_id=self.uid
         )
-        log.info('fast forward workflow id %s', self.uid)
+        log.info('fast forward workflow %s', self)
 
         # Build a list of task in the graph that need to be executed
         resume = list()
@@ -882,8 +890,13 @@ class Workflow(asyncio.Future):
                 return
 
             if t_state.done():
-                # We won't manually create a task
+                # We won't manually create an asyncio task since it won't be
+                # run (the task is 'done'). Yet, we need a memory print of its
+                # execution (mainly for reporting purposes).
                 t_shadow = type('TukioTaskShadow', (object,), {
+                    'done': lambda: True,
+                    'cancelled': lambda: False,
+                    '_exception': None,
                     'as_dict': lambda: t_report
                 })
 

@@ -3,7 +3,6 @@ Tukio Workflow Engine
 """
 import asyncio
 import logging
-from copy import copy
 
 from tukio.workflow import OverrunPolicy, new_workflow, Workflow
 from tukio.broker import get_broker
@@ -158,6 +157,8 @@ class Engine(asyncio.Future):
 
         try:
             wflow.result()
+        except asyncio.CancelledError:
+            log.warning('workflow %s has been cancelled', wflow)
         except Exception as exc:
             log.warning('workflow %s ended on exception', wflow)
             log.exception(exc)
