@@ -343,5 +343,7 @@ class Engine(asyncio.Future):
 
         with await self._lock:
             wflow = Workflow(template, loop=self._loop)
+            self._add_wflow(wflow)
+            wflow.add_done_callback(self._remove_wflow)
             wflow.fast_forward(report)
         return wflow

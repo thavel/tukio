@@ -845,10 +845,14 @@ class Workflow(asyncio.Future):
         self.uid = report['exec']['id']
         self._start = report['exec']['start']
         self._end = report['exec'].get('end')
+        self._source = EventSource(
+            workflow_template_id=self._template.uid,
+            workflow_exec_id=self.uid
+        )
         log.info('fast forward workflow id %s', self.uid)
 
         # Build a list of task in the graph that need to be executed
-        resume = set()
+        resume = list()
 
         def browse(entry, parent=None):
             """
@@ -856,21 +860,21 @@ class Workflow(asyncio.Future):
                 - ensure executed task contexts are restored.
                 - find tasks that need to be executed.
             """
-            ttemplate = copy(next(
-                t for t in report['tasks'] if t['uid'] == entry.uid
-            ))
+            ttemplate = next(
+                t for t in report['tasks'] if t['id'] == entry.uid
+            )
             treport = ttemplate.get('exec')
             if not treport:
                 if not parent:
                     raise RescueError(self.uid, 'root task never been started')
                 # No execution report found, the task needs to be executed
-                resume.add((entry.template, None, parent))
+                resume.append((entry, None, parent))
                 return
 
             tstate = FutureState(treport['state'])
             if not tstate.done():
                 # Pending, suspended or cancelled tasks need to be executed
-                resume.add((entry.template, ttemplate, parent))
+                resume.append((entry, ttemplate, parent))
                 return
 
             if tstate.done():
@@ -892,18 +896,20 @@ class Workflow(asyncio.Future):
         # Resume/start tasks that need to be executed
         for task_template, task_report, parent_report in resume:
             if parent_report:
-                inputs = parent_report['exec']['ouputs']
+                inputs = parent_report['exec']['outputs']
                 source = EventSource(
                     workflow_template_id=self.template.uid,
                     workflow_exec_id=self.uid,
-                    task_template_id=parent_report['uid'],
-                    task_exec_id=parent_report['exec']['uid']
+                    task_template_id=parent_report['id'],
+                    task_exec_id=parent_report['exec']['id']
                 )
                 event = Event(inputs, source=source)
             else:
                 # No parent report = root task
                 event = Event(task_report['exec']['inputs'])
             self._new_task(task_template, event)
+
+        self._dispatch_exec_event(WorkflowExecState.resume)
 
 
 def new_workflow(wf_tmpl, running=None, loop=None):
