@@ -334,7 +334,7 @@ class Engine(asyncio.Future):
 
     async def rescue(self, template, report):
         """
-        Starts a dangling workflow instance using its last known report.
+        Attaches a dangling workflow instance using its last known report.
         """
         if self._must_stop:
             log.debug("The engine is stopping, cannot rescue the workflow from"

@@ -1,7 +1,6 @@
 from enum import Enum
 
 
-
 class SkipTask(Exception):
     pass
 
@@ -34,7 +33,7 @@ class FutureState(Enum):
         """
         Returns the state of a future as `FutureState` member
         """
-        if hasattr(future, '_resumed') and not future._resumed.is_set():
+        if hasattr(future, 'committed') and not future.committed:
             return cls.suspended
         if not future.done():
             return cls.pending

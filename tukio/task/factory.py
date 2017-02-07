@@ -44,11 +44,12 @@ class TukioTask(asyncio.Task):
         self._end = None
         self._inputs = None
         self._outputs = None
-        self._resumed = asyncio.Event()
-        self._resumed.set()
         self._queue = asyncio.Queue(loop=self._loop)
         if self.holder:
             self.holder.queue = self._queue
+        # A 'committed' task is a pending task not suspended
+        self._committed = asyncio.Event()
+        self._committed.set()
 
     @property
     def inputs(self):
@@ -75,9 +76,20 @@ class TukioTask(asyncio.Task):
     def queue(self):
         return self._queue
 
+    @property
+    def committed(self):
+        return self._committed.is_set()
+
     def suspend(self):
+        """
+        Suspend a task means, for now, to cancel the task but flag it as
+        'suspended'. It shall be executed from scratch upon workflow resume.
+
+        TODO: improve this method to avoid cancelling the task but to actually
+        suspend transactionnal jobs inside the task.
+        """
         self.cancel()
-        self._resumed.clear()
+        self._committed.clear()
 
     def as_dict(self):
         """

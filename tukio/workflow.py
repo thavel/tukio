@@ -449,9 +449,9 @@ class Workflow(asyncio.Future):
             workflow_template_id=self._template.uid,
             workflow_exec_id=self.uid
         )
-        # Suspend/resume mechanism
-        self._resumed = asyncio.Event()
-        self._resumed.set()
+        # A 'committed' workflow is a pending workflow not suspended
+        self._committed = asyncio.Event()
+        self._committed.set()
 
     @property
     def template(self):
@@ -460,6 +460,10 @@ class Workflow(asyncio.Future):
     @property
     def policy(self):
         return self._template.policy
+
+    @property
+    def committed(self):
+        return self._committed.is_set()
 
     @_current_workflow
     def _unlock(self, _):
@@ -657,7 +661,7 @@ class Workflow(asyncio.Future):
 
         # Ensure the workflow is not suspended, else wait for a resume.
         try:
-            await self._resumed.wait()
+            await self._committed.wait()
         except asyncio.CancelledError:
             # If cancelled, the workflow will return with the statement below.
             log.debug('Suspended workflow cancelled')
@@ -694,7 +698,7 @@ class Workflow(asyncio.Future):
         result is set to either the exec graph (represented by a dict) or to an
         exception raised at task creation.
         """
-        if not self._resumed.is_set():
+        if not self._committed.is_set():
             return
 
         # Note: the result of the workflow may already have been set by another
@@ -762,9 +766,9 @@ class Workflow(asyncio.Future):
         Suspend the execution of this workflow prevents any new task from
         starting.
         """
-        if not self._resumed.is_set():
+        if not self._committed.is_set():
             return
-        self._resumed.clear()
+        self._committed.clear()
 
         # Suspend a task means the task will be cancelled with the state
         # 'suspended', which can be used later to resume the workflow
@@ -777,12 +781,12 @@ class Workflow(asyncio.Future):
         """
         Resume the execution of this workflow allows new tasks to start.
         """
-        if self._resumed.is_set():
-            log.error("Can't resume a workflow that hasn't been suspended")
+        if self._committed.is_set():
+            log.error('Cannot resume a workflow that has not been suspended')
             return
-        self._resumed.set()
+        self._committed.set()
 
-        # Next tasks are done waiting for '_resumed' asyncio event
+        # Next tasks are done waiting for '_committed' asyncio event
         # The 'suspended' ones needs to be re-executed
         for task in self._done_tasks:
             if FutureState.get(task) is not FutureState.suspended:
@@ -860,37 +864,37 @@ class Workflow(asyncio.Future):
                 - ensure executed task contexts are restored.
                 - find tasks that need to be executed.
             """
-            ttemplate = next(
+            t_template = next(
                 t for t in report['tasks'] if t['id'] == entry.uid
             )
-            treport = ttemplate.get('exec')
-            if not treport:
+            t_report = t_template.get('exec')
+            if not t_report:
                 if not parent:
                     raise RescueError(self.uid, 'root task never been started')
                 # No execution report found, the task needs to be executed
                 resume.append((entry, None, parent))
                 return
 
-            tstate = FutureState(treport['state'])
-            if not tstate.done():
+            t_state = FutureState(t_report['state'])
+            if not t_state.done():
                 # Pending, suspended or cancelled tasks need to be executed
-                resume.append((entry, ttemplate, parent))
+                resume.append((entry, t_template, parent))
                 return
 
-            if tstate.done():
-                tshadow = type('ShadowTukioTask', (object,), {
-                    'shadow': True,
-                    'as_dict': lambda: treport
+            if t_state.done():
+                # We won't manually create a task
+                t_shadow = type('TukioTaskShadow', (object,), {
+                    'as_dict': lambda: t_report
                 })
 
                 # Add this task to the tracking sets
-                self.tasks.add(tshadow)
-                self._done_tasks.add(tshadow)
-                self._tasks_by_id[entry.uid] = tshadow
+                self.tasks.add(t_shadow)
+                self._done_tasks.add(t_shadow)
+                self._tasks_by_id[entry.uid] = t_shadow
 
                 # Recursive browing
-                for tnext in self._template.dag.successors(entry):
-                    browse(tnext, ttemplate)
+                for t_next in self._template.dag.successors(entry):
+                    browse(t_next, t_template)
         browse(self._template.root())
 
         # Resume/start tasks that need to be executed
@@ -909,7 +913,7 @@ class Workflow(asyncio.Future):
                 event = Event(task_report['exec']['inputs'])
             self._new_task(task_template, event)
 
-        self._dispatch_exec_event(WorkflowExecState.resume)
+        self._dispatch_exec_event(WorkflowExecState.begin)
 
 
 def new_workflow(wf_tmpl, running=None, loop=None):
