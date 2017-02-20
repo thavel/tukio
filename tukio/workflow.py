@@ -812,6 +812,8 @@ class Workflow(asyncio.Future):
 
         cancelled = self._cancel_all_tasks()
         if cancelled == 0:
+            # Tasks where already all done.If not,
+            # the last task will end the workflow already set as _must_cancel
             super().cancel()
         return True
 
